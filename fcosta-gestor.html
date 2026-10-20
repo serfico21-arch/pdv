@@ -2618,7 +2618,6 @@ tr:last-child td{border-bottom:none;}
   <div class="content" id="content"></div>
 </div>
 <span class="gestor-tag-fixed">GESTOR FCOSTA</span>
-<a class="test-env-link" href="fcosta-gestor-teste.html" title="Abrir ambiente de teste">ambiente de teste</a>
 <div id="modalRoot"></div>
 <div id="toastRoot"></div>
 <div id="receiptArea"></div>
@@ -3192,6 +3191,7 @@ function askCadastroPassword(){
         <button class="btn btn-primary" onclick="tryCadastroPassword()">Entrar</button>
       </div>
       <p style="text-align:center; margin-top:14px;"><button class="linkbtn" onclick="abrirEsqueciSenha()">Esqueci minha senha</button></p>
+      <p style="text-align:center; margin-top:4px;"><button class="linkbtn" onclick="abrirResetAcesso()">Não consigo entrar de jeito nenhum (código do suporte)</button></p>
     </div></div>`;
 }
 async function setupCadastroPassword(){
@@ -6833,7 +6833,7 @@ async function iniciarBackupAutomatico(){
 /* ================================================================
    ATUALIZAÇÕES — verifica no GitHub se existe versão mais nova
    ================================================================ */
-const APP_VERSAO = '2.4.0';
+const APP_VERSAO = '2.4.2';
 const URL_VERSAO = 'https://raw.githubusercontent.com/serfico21-arch/pdv/main/versao.json';
 const URL_REPO_OK = 'https://github.com/serfico21-arch/pdv/';
 let _upd = { checando:false, ultima:null, info:null, erro:null, avisou:false };
@@ -7512,6 +7512,55 @@ async function garantirLicenca(){
       if((_lic.est.tipo==='expirada' || _lic.est.tipo==='teste_fim') && !document.getElementById('licTela')) licMostrar(false);
     }catch(e){ /* ignora */ }
   }, 30*60*1000);
+}
+
+/* ---------------- Redefinição de acesso (código do suporte) ----------------
+   Para quando o cliente esquece a senha e a pergunta de segurança. O código é assinado
+   por você, vale só para esta instalação, por 3 dias, e só pode ser usado uma vez.
+   Apaga APENAS os usuários/senhas; produtos, vendas e demais dados ficam intactos. */
+const K_RESET = 'pc_lic_reset_usados';
+async function licVerificarReset(texto){
+  const t = String(texto||'').replace(/\s+/g,'');
+  if(!/^FCGR1-[\w-]+\.[\w-]+$/.test(t)) return { ok:false, motivo:'Código em formato inválido. Cole o código inteiro, começando por FCGR1-.' };
+  if(!(window.crypto && crypto.subtle)) return { ok:false, motivo:'Este navegador não permite conferir o código. Abra o sistema no Chrome ou Edge.' };
+  try{
+    const [p, s] = t.slice(6).split('.');
+    const payload = licB64(p), sig = licB64(s);
+    const k = await crypto.subtle.importKey('jwk', LIC_PUB, { name:'ECDSA', namedCurve:'P-256' }, false, ['verify']);
+    if(!(await crypto.subtle.verify({ name:'ECDSA', hash:'SHA-256' }, k, sig, payload))) return { ok:false, motivo:'Código inválido (assinatura não confere).' };
+    const d = JSON.parse(new TextDecoder().decode(payload));
+    if(d.tipo!=='reset') return { ok:false, motivo:'Código inválido.' };
+    if(String(d.id||'').replace(/-/g,'') !== _lic.id.replace(/-/g,'')) return { ok:false, motivo:'Este código foi emitido para outro computador/instalação.' };
+    if(licDias(todayISODate(), d.expira) < 0) return { ok:false, motivo:'Código vencido. Peça um novo.' };
+    const usados = await loadKey(K_RESET, []);
+    if(usados.includes(d.n)) return { ok:false, motivo:'Este código já foi usado. Peça um novo.' };
+    return { ok:true, dados:d };
+  }catch(e){ return { ok:false, motivo:'Código inválido.' }; }
+}
+function abrirResetAcesso(){
+  document.getElementById('modalRoot').innerHTML = `
+    <div class="modal-bg"><div class="modal">
+      <h3>Redefinir acesso (código do suporte)</h3>
+      <p class="muted">Use só se esqueceu usuário, senha e a pergunta de segurança. Envie ao suporte o ID abaixo e cole o código recebido. <strong>Isso apaga apenas os logins</strong> — produtos, vendas e financeiro continuam. Depois você cria um novo administrador.</p>
+      <div class="field"><label>ID desta instalação</label><input readonly value="${escapeHtml(_lic.id)}" onclick="this.select()"></div>
+      <div id="rsErr"></div>
+      <div class="field"><label>Código de redefinição</label><textarea id="rsCodigo" rows="4" placeholder="FCGR1-..." style="width:100%;font:12px/1.4 monospace;"></textarea></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="askCadastroPassword()">Voltar</button>
+        <button class="btn btn-primary" onclick="aplicarResetAcesso()">Redefinir</button>
+      </div>
+    </div></div>`;
+}
+async function aplicarResetAcesso(){
+  const r = await licVerificarReset(document.getElementById('rsCodigo').value);
+  if(!r.ok){ document.getElementById('rsErr').innerHTML = '<div class="errmsg">'+escapeHtml(r.motivo)+'</div>'; return; }
+  const usados = await loadKey(K_RESET, []); usados.push(r.dados.n);
+  await saveKey(K_RESET, usados.slice(-50));
+  DB.settings.usuarios = [];
+  await saveKey(KEYS.settings, DB.settings);
+  cadastrosUnlocked = false;
+  showToast('Acesso redefinido. Crie um novo administrador.', 4500);
+  askCadastroPassword();
 }
 
 /* ---------------- Inicialização ---------------- */

@@ -1,3 +1,5 @@
+Removido o link "ambiente de teste" da tela (a página não existia)
+Recuperação de acesso: código do suporte redefine os logins sem apagar os dados
 Ativação por licença: cada instalação precisa de uma chave (teste grátis de 15 dias)
 Backup automático: cópias a cada 3 minutos dentro do sistema e opção de pasta no computador
 Restauração de backup agora recusa arquivos vazios ou corrompidos
