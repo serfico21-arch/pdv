@@ -1,0 +1,14 @@
+{
+  "versao": "2.4.0",
+  "data": "2026-10-20",
+  "instalador": "https://github.com/serfico21-arch/pdv/raw/main/FCostaGestor-Instalador.exe",
+  "html": "https://github.com/serfico21-arch/pdv/raw/main/fcosta-gestor.html",
+  "sha256": "0783a53b8f2e1e5c43dfe57b6f0824b198ea3e941957b9026a9f1e8ba071168f",
+  "notas": [
+    "Ativação por licença: cada instalação precisa de uma chave (teste grátis de 15 dias)",
+    "Backup automático: cópias a cada 3 minutos dentro do sistema e opção de pasta no computador",
+    "Restauração de backup agora recusa arquivos vazios ou corrompidos",
+    "Aviso quando o sistema abre com dados incompletos e opção de restaurar a última cópia",
+    "Avisos de nova versão dentro do sistema"
+  ]
+}

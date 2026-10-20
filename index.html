@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FCosta Gestor — Frente de caixa</title>
+<style>
+  :root{ --bg:#faf7f2; --card:#ffffff; --txt:#2b2622; --mut:#6d645b; --acc:#a4472a; --acc-t:#ffffff; --bd:#e5ddd2; --warn-bg:#fff6df; --warn-bd:#d9a441; }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#1d1a17; --card:#26221e; --txt:#f1ebe3; --mut:#b3a99d; --acc:#d9744f; --acc-t:#1d1a17; --bd:#3a342e; --warn-bg:#3a3020; --warn-bd:#b8893a; }
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--txt); font:16px/1.55 system-ui,"Segoe UI",Roboto,Arial,sans-serif; }
+  main{ max-width:760px; margin:0 auto; padding:32px 18px 60px; }
+  h1{ font-size:1.7rem; margin:0 0 4px; }
+  h2{ font-size:1.15rem; margin:0 0 10px; }
+  .sub{ color:var(--mut); margin:0 0 24px; }
+  .card{ background:var(--card); border:1px solid var(--bd); border-radius:12px; padding:18px 20px; margin-bottom:16px; }
+  .btn{ display:inline-block; background:var(--acc); color:var(--acc-t); text-decoration:none; font-weight:600; padding:12px 22px; border-radius:10px; }
+  .btn:hover{ filter:brightness(1.08); }
+  ol,ul{ margin:8px 0 0; padding-left:22px; }
+  li{ margin:5px 0; }
+  code{ background:var(--bg); border:1px solid var(--bd); border-radius:6px; padding:1px 6px; font-size:.9em; word-break:break-all; }
+  .warn{ background:var(--warn-bg); border:1px solid var(--warn-bd); }
+  .mut{ color:var(--mut); font-size:.92rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>FCosta Gestor</h1>
+  <p class="sub">Frente de caixa, estoque e financeiro para o mercado — funciona offline, no seu computador.</p>
+
+  <div class="card">
+    <h2>1. Baixar e instalar</h2>
+    <p><a class="btn" href="FCostaGestor-Instalador.exe" download>⬇️ Baixar instalador (Windows)</a></p>
+    <ol>
+      <li>Baixe o arquivo <code>FCostaGestor-Instalador.exe</code> clicando no botão acima.</li>
+      <li>Dê dois cliques para instalar e siga as telas (Avançar → Instalar → Concluir).</li>
+      <li>Abra pelo atalho <strong>FCosta Gestor</strong> na área de trabalho.</li>
+    </ol>
+    <p class="mut">Se o Windows mostrar "O Windows protegeu seu computador" (o instalador não tem assinatura digital paga), clique em <strong>Mais informações → Executar assim mesmo</strong>.</p>
+  </div>
+
+  <div class="card warn">
+    <h2>⚠️ Use sempre o mesmo navegador</h2>
+    <p>Os dados ficam guardados no navegador deste computador. Abra o sistema sempre pelo atalho, no <strong>mesmo navegador e perfil</strong> de sempre (de preferência Chrome ou Edge). Em outro navegador, em modo anônimo ou depois de limpar os dados de navegação, o sistema abre vazio.</p>
+    <p><strong>Não use este sistema abrindo por um endereço da internet:</strong> lá os dados ficariam separados dos do computador. Instale e use pelo atalho.</p>
+  </div>
+
+  <div class="card">
+    <h2>2. Proteja seus dados (backup)</h2>
+    <ul>
+      <li>Em <strong>Cadastros → Impressora &amp; Backup → Backup automático</strong>, escolha uma pasta (de preferência num pen-drive ou numa pasta nova como <code>Backup FCosta</code>). O sistema grava lá um arquivo por dia.</li>
+      <li>O sistema também guarda cópias internas a cada 3 minutos e, se abrir vazio ou incompleto, oferece recuperar.</li>
+      <li>Baixe um <strong>backup completo</strong> pelo menos uma vez por semana e guarde fora do computador.</li>
+      <li>Antes de confiar num backup, confira se ele abre e tem tamanho normal. Arquivo zerado não restaura nada.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>3. Atualizações</h2>
+    <p>Com o computador conectado à internet, o sistema verifica sozinho se há versão nova e mostra um aviso <strong>🔄 Atualização</strong> no topo. Basta clicar, fazer o backup, baixar e executar o novo instalador. Seus dados continuam no navegador.</p>
+    <p class="mut">Também dá para verificar à mão em Cadastros → Impressora &amp; Backup → Atualização do sistema. Versão atual: <strong><!--VER-->2.4.0<!--/VER--></strong>.</p>
+  </div>
+
+  <div class="card">
+    <h2>4. Conferir se o instalador veio inteiro</h2>
+    <p class="mut">No Windows, abra o Prompt de Comando na pasta do arquivo baixado e rode:</p>
+    <p><code>certutil -hashfile FCostaGestor-Instalador.exe SHA256</code></p>
+    <p class="mut">O resultado deve ser exatamente:</p>
+    <p><code><!--SHA-->0783a53b8f2e1e5c43dfe57b6f0824b198ea3e941957b9026a9f1e8ba071168f<!--/SHA--></code></p>
+    <p class="mut">Se for diferente, o download veio incompleto ou foi alterado: apague e baixe de novo.</p>
+  </div>
+
+  <div class="card">
+    <h2>Sem instalar</h2>
+    <p>Também dá para usar o arquivo <a href="fcosta-gestor.html" download>fcosta-gestor.html</a> sozinho: baixe, salve numa pasta fixa e abra sempre por ele no mesmo navegador.</p>
+  </div>
+</main>
+</body>
+</html>

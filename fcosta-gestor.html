@@ -2605,6 +2605,9 @@ tr:last-child td{border-bottom:none;}
       <div class="right-tools">
         <select class="op-select" id="opSelect" onchange="setOperator(this.value)"></select>
         <span class="lock-badge" id="saveWarnBadge" style="display:none; background:rgba(178,64,47,0.3); color:#ffb3a3;">🚨 Falha ao salvar — não feche o sistema</span>
+        <span class="lock-badge" id="updBadge" style="display:none; cursor:pointer; background:rgba(217,164,65,0.35); color:#fff3d1;" onclick="abrirModalAtualizacao()" title="Clique para ver a atualização"></span>
+        <span class="lock-badge" id="licBadge" style="display:none; cursor:pointer; background:rgba(217,164,65,0.35); color:#fff3d1;" onclick="abrirModalLicenca()" title="Clique para ver a licença"></span>
+        <span class="lock-badge" id="autoBackupBadge" style="display:none;" title="Cópia automática de segurança dos dados"></span>
         <span class="lock-badge" id="lockIndicator">🔒 Área protegida bloqueada</span>
         <button class="btn btn-ghost btn-sm" id="btnFullscreen" style="color:#fff;border-color:rgba(255,255,255,0.3);" onclick="toggleFullscreen()" title="Tela cheia (F2)">⛶ Tela Cheia</button>
         <button class="btn btn-ghost btn-sm" style="color:#fff;border-color:rgba(255,255,255,0.3);" onclick="abrirManualAjuda()">❓ Ajuda</button>
@@ -2718,8 +2721,22 @@ async function idbGet(key){
 async function idbSet(key, value){
   const db = await abrirIDB();
   return new Promise((resolve, reject)=>{
-    const tx = db.transaction(DB_STORE, 'readwrite');
+    // durability 'strict': o navegador só confirma depois de gravar de verdade no disco.
+    // Protege contra queda de energia (o padrão "relaxed" pode perder as últimas gravações).
+    let tx;
+    try{ tx = db.transaction(DB_STORE, 'readwrite', {durability:'strict'}); }
+    catch(e){ tx = db.transaction(DB_STORE, 'readwrite'); }
     tx.objectStore(DB_STORE).put(value, key);
+    tx.oncomplete = ()=> resolve(true);
+    tx.onerror = ()=> reject(tx.error);
+    tx.onabort = ()=> reject(tx.error || new Error('Transação cancelada'));
+  });
+}
+async function idbDelete(key){
+  const db = await abrirIDB();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction(DB_STORE, 'readwrite');
+    tx.objectStore(DB_STORE).delete(key);
     tx.oncomplete = ()=> resolve(true);
     tx.onerror = ()=> reject(tx.error);
   });
@@ -2741,6 +2758,7 @@ async function saveKey(key, value, tentativa){
     await idbSet(key, JSON.stringify(value));
     try{ localStorage.setItem(key, JSON.stringify(value)); }catch(e){ /* apenas reserva extra, ignora erro de espaço */ }
     limparAvisoSalvamento();
+    if(typeof marcarAlterado==='function') marcarAlterado();
   }catch(e){
     console.error('Falha ao salvar', key, e, '— tentativa', tentativa);
     if(tentativa < 3){
@@ -6421,6 +6439,15 @@ function renderConfigCad(){
     <button class="btn btn-outline" style="margin-top:14px;" onclick="imprimirManual()">🖨️ Testar impressão (última venda)</button>
   </div>
   <div class="card">
+    <h2>🔄 Atualização do sistema</h2>
+    <div id="updBox">${renderUpdBox()}</div>
+  </div>
+  <div class="card">
+    <h2>💾 Backup automático</h2>
+    <div class="desc">Protege seus dados contra queda de energia e desligamento do computador: não precisa lembrar de fazer backup.</div>
+    <div id="autoBackupBox">${renderAutoBackupBox()}</div>
+  </div>
+  <div class="card">
     <h2>Backup dos Dados (JSON)</h2>
     <div class="desc">Salve um arquivo com TODOS os dados do sistema (produtos, vendas, estoque, financeiro, fornecedores, clientes) para guardar em segurança ou transferir para outro computador. Este é o formato recomendado para restaurar aqui no próprio sistema.</div>
     <div class="small-note" style="margin-bottom:12px;">
@@ -6450,6 +6477,437 @@ function renderConfigCad(){
     </div>
   </div>`;
 }
+
+/* ================================================================
+   BACKUP AUTOMÁTICO (cópias internas + pasta opcional) e VALIDAÇÃO
+   ----------------------------------------------------------------
+   - A cada alteração os dados já são gravados no navegador (modo estrito,
+     resistente a queda de energia).
+   - Além disso, a cada poucos minutos (se houve alteração) o sistema guarda
+     uma CÓPIA COMPLETA dentro do próprio navegador: as 10 últimas + a última
+     de cada dia (10 dias). Tudo comprimido.
+   - Opcional: escolher uma pasta do computador; o sistema grava lá um arquivo
+     por dia (backup-auto-fcosta-AAAA-MM-DD.json), que sobrevive até se o
+     navegador for limpo.
+   - Se o sistema abrir VAZIO e existir cópia automática, oferece restaurar.
+   ================================================================ */
+const AUTO_META_KEY = 'pc_auto_meta';
+const AUTO_DIR_KEY  = 'pc_auto_dirhandle';
+const AUTO_INTERVALO_MS = 3*60*1000;
+const AUTO_LIMITES = { auto:10, dia:10, seguranca:3, protegida:3 };
+let _autoPausado = false;
+const AUTO_LISTAS = ['products','movements','sales','caixaSessions','lancamentos','contas','suppliers','clients','employees'];
+let _autoSujo = false, _autoVersao = 0, _autoMetaCache = [], _dirHandle = null;
+let _autoStatus = { ultimoEm:null, erro:null, pasta:'nenhuma' }; // pasta: nenhuma | ok | permissao | erro
+let _autoFila = Promise.resolve();
+function marcarAlterado(){ _autoSujo = true; _autoVersao++; }
+function enfileirarAuto(fn){ const p = _autoFila.then(fn, fn); _autoFila = p.catch(()=>{}); return p; }
+
+function contarDados(o){
+  o = o||{};
+  const n = k => Array.isArray(o[k]) ? o[k].length : 0;
+  return { produtos:n('products'), vendas:n('sales'), clientes:n('clients'), movimentos:n('movements'), financeiro:n('lancamentos')+n('contas') };
+}
+function totalRegistros(o){ return AUTO_LISTAS.reduce((t,k)=>t+(Array.isArray(o[k])?o[k].length:0),0); }
+function temDadosNoDB(){ return totalRegistros(DB) > 0; }
+function fmtResumoDados(r){
+  return r.produtos+' produto(s), '+r.vendas+' venda(s), '+r.clientes+' cliente(s), '+r.movimentos+' mov. de estoque';
+}
+function validarBackup(data){
+  if(!data || typeof data!=='object' || Array.isArray(data) || !Array.isArray(data.products))
+    return { ok:false, erro:'Arquivo inválido: não parece ser um backup completo deste sistema.' };
+  for(const k of AUTO_LISTAS){
+    if(data[k]!==undefined && !Array.isArray(data[k]))
+      return { ok:false, erro:'Backup danificado: o campo "'+k+'" está em formato inválido. Restauração cancelada.' };
+  }
+  if(totalRegistros(data)===0)
+    return { ok:false, erro:'Este backup está VAZIO (sem produtos, vendas, clientes etc.). Restaurá-lo apagaria seus dados atuais sem trazer nada. Restauração cancelada.' };
+  return { ok:true, resumo:contarDados(data) };
+}
+
+/* compressão (gzip) para as cópias internas — cai para texto puro se o navegador não suportar */
+async function empacotarTexto(txt){
+  try{
+    if(typeof CompressionStream==='function'){
+      const buf = await new Response(new Blob([txt]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
+      return { fmt:'gz', data:buf };
+    }
+  }catch(e){ /* usa texto puro */ }
+  return { fmt:'txt', data:txt };
+}
+async function desempacotarTexto(reg){
+  if(!reg) throw new Error('Cópia não encontrada');
+  if(reg.fmt==='gz'){
+    return await new Response(new Blob([reg.data]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+  }
+  return reg.data;
+}
+async function lerAutoMeta(){
+  try{ const v = await idbGet(AUTO_META_KEY); return v ? JSON.parse(v) : []; }catch(e){ return []; }
+}
+async function gravarAutoMeta(m){ _autoMetaCache = m; await idbSet(AUTO_META_KEY, JSON.stringify(m)); }
+
+/* grava uma cópia completa do estado atual. tipos: 'auto' (rolante), 'dia' (última do dia), 'seguranca' (antes de restaurar) */
+async function gravarSnapshot(tipos){
+  const obj = montarBackupJSON();
+  const txt = JSON.stringify(obj);
+  const resumo = contarDados(obj);
+  const reg = await empacotarTexto(txt);
+  const agora = Date.now(), dia = todayISODate();
+  let meta = await lerAutoMeta();
+  const novasChaves = [];
+  for(const t of tipos){
+    const key = t==='dia' ? 'pc_auto_dia_'+dia : 'pc_auto_'+t+'_'+agora;
+    await idbSet(key, reg);
+    meta = meta.filter(e=>e.key!==key);
+    meta.push({ key, tipo:t, at:agora, resumo, dia });
+    novasChaves.push(key);
+  }
+  // limpeza: mantém só os mais recentes de cada tipo
+  for(const t of Object.keys(AUTO_LIMITES)){
+    const doTipo = meta.filter(e=>e.tipo===t).sort((a,b)=>b.at-a.at);
+    for(const velho of doTipo.slice(AUTO_LIMITES[t])){
+      if(novasChaves.includes(velho.key)) continue;
+      try{ await idbDelete(velho.key); }catch(e){}
+      meta = meta.filter(e=>e.key!==velho.key);
+    }
+  }
+  await gravarAutoMeta(meta);
+  return txt;
+}
+
+async function escreverNaPasta(txt, dia){
+  if(!_dirHandle){ _autoStatus.pasta='nenhuma'; return; }
+  try{
+    const perm = await _dirHandle.queryPermission({mode:'readwrite'});
+    if(perm!=='granted'){ _autoStatus.pasta='permissao'; return; }
+    const fh = await _dirHandle.getFileHandle('backup-auto-fcosta-'+dia+'.json', {create:true});
+    const w = await fh.createWritable();   // grava num arquivo temporário e só troca ao fechar (não corrompe se cair a energia)
+    await w.write(txt);
+    await w.close();
+    _autoStatus.pasta = 'ok';
+    // mantém só os 14 arquivos mais recentes na pasta
+    const nomes = [];
+    for await (const [nome] of _dirHandle.entries()){
+      if(/^backup-auto-fcosta-\d{4}-\d{2}-\d{2}\.json$/.test(nome)) nomes.push(nome);
+    }
+    nomes.sort();
+    for(const velho of nomes.slice(0, Math.max(0, nomes.length-14))){
+      try{ await _dirHandle.removeEntry(velho); }catch(e){}
+    }
+  }catch(e){
+    console.error('Backup na pasta falhou', e);
+    _autoStatus.pasta = 'erro';
+  }
+}
+
+function fazerBackupAutomatico(forcar){
+  return enfileirarAuto(async ()=>{
+    if(!forcar && !_autoSujo) return;
+    if(_autoPausado && !forcar) return;   // aguardando decisão sobre possível perda de dados
+    if(!temDadosNoDB()) return;          // nunca guarda cópia "vazia"
+    const versao = _autoVersao;
+    try{
+      const txt = await gravarSnapshot(['auto','dia']);
+      await escreverNaPasta(txt, todayISODate());
+      if(_autoVersao===versao) _autoSujo = false;
+      _autoStatus.ultimoEm = Date.now(); _autoStatus.erro = null;
+    }catch(e){
+      console.error('Backup automático falhou', e);
+      _autoStatus.erro = String(e && e.message || e);
+    }
+    atualizarUIAutoBackup();
+  });
+}
+
+function fmtDataHoraAuto(ms){
+  const d = new Date(ms);
+  return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+}
+function atualizarUIAutoBackup(){
+  const b = document.getElementById('autoBackupBadge');
+  if(b){
+    if(_autoStatus.erro){ b.style.display='inline-flex'; b.style.background='rgba(178,64,47,0.3)'; b.style.color='#ffb3a3'; b.textContent='⚠️ Backup automático falhou'; }
+    else if(_autoStatus.ultimoEm){ b.style.display='inline-flex'; b.style.background=''; b.style.color=''; b.textContent='💾 Cópia automática '+new Date(_autoStatus.ultimoEm).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); }
+    else b.style.display='none';
+  }
+  const box = document.getElementById('autoBackupBox');
+  if(box) box.innerHTML = renderAutoBackupBox();
+}
+function renderAutoBackupBox(){
+  const meta = [..._autoMetaCache].sort((a,b)=>b.at-a.at);
+  const nomeTipo = {auto:'Automática', dia:'Fim do dia', seguranca:'Antes de restaurar', protegida:'Protegida (antes de perda)'};
+  const linhas = meta.map(e=>`
+    <tr>
+      <td>${nomeTipo[e.tipo]||e.tipo}</td>
+      <td>${fmtDataHoraAuto(e.at)}</td>
+      <td class="muted">${e.resumo ? escapeHtml(fmtResumoDados(e.resumo)) : ''}</td>
+      <td style="text-align:right;"><button class="btn btn-outline btn-sm" onclick="restaurarCopiaAutomatica('${e.key}')">Restaurar</button></td>
+    </tr>`).join('');
+  let pastaHtml;
+  if(!window.showDirectoryPicker){
+    pastaHtml = '<div class="small-note">Seu navegador não permite gravar numa pasta do computador. Use o <strong>Google Chrome</strong> ou o <strong>Microsoft Edge</strong> para ter esse recurso.</div>';
+  }else if(_autoStatus.pasta==='ok'){
+    pastaHtml = `<div class="small-note">📁 Pasta de backup: <strong style="color:var(--verde,#2f6b3a)">ativa</strong> (nome da pasta: <strong>${escapeHtml(_dirHandle&&_dirHandle.name||'')}</strong>). Um arquivo por dia é atualizado lá automaticamente.</div>
+      <button class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="escolherPastaBackup()">Trocar pasta</button>`;
+  }else if(_autoStatus.pasta==='permissao'){
+    pastaHtml = `<div class="small-note" style="color:var(--vermelho)">📁 O navegador precisa da sua permissão novamente para gravar na pasta <strong>${escapeHtml(_dirHandle&&_dirHandle.name||'')}</strong>.</div>
+      <button class="btn btn-primary btn-sm" style="margin-top:6px;" onclick="reativarPastaBackup()">Permitir gravar na pasta</button>
+      <button class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="escolherPastaBackup()">Trocar pasta</button>`;
+  }else if(_autoStatus.pasta==='erro'){
+    pastaHtml = `<div class="small-note" style="color:var(--vermelho)">📁 Não consegui gravar na pasta (pode estar cheia, removida ou sem permissão).</div>
+      <button class="btn btn-primary btn-sm" style="margin-top:6px;" onclick="escolherPastaBackup()">Escolher outra pasta</button>`;
+  }else{
+    pastaHtml = `<div class="small-note">📁 <strong>Recomendado:</strong> escolha uma pasta do computador (ex.: crie uma pasta <span class="mono">Backup FCosta</span> em Documentos ou num pen-drive) para o sistema gravar uma cópia por dia fora do navegador.</div>
+      <button class="btn btn-primary btn-sm" style="margin-top:6px;" onclick="escolherPastaBackup()">📁 Escolher pasta de backup</button>`;
+  }
+  return `
+    <div class="small-note" style="margin-bottom:8px;">
+      O sistema guarda <strong>cópias automáticas</strong> dentro do navegador a cada ${AUTO_INTERVALO_MS/60000} minutos (quando há alterações) — as 10 últimas e a última de cada dia.
+      ${_autoStatus.ultimoEm ? 'Última cópia: <strong>'+fmtDataHoraAuto(_autoStatus.ultimoEm)+'</strong>.' : 'Ainda não houve cópia nesta sessão.'}
+      ${_autoStatus.erro ? '<br><strong style="color:var(--vermelho)">Erro: '+escapeHtml(_autoStatus.erro)+'</strong>' : ''}
+    </div>
+    ${pastaHtml}
+    <div style="margin-top:12px;">
+      <button class="btn btn-outline btn-sm" onclick="fazerBackupAutomatico(true).then(()=>showToast('Cópia automática feita agora.'))">Fazer cópia agora</button>
+    </div>
+    ${meta.length ? `<div style="overflow-x:auto; margin-top:10px;"><table><thead><tr><th>Tipo</th><th>Data e hora</th><th>Conteúdo</th><th></th></tr></thead><tbody>${linhas}</tbody></table></div>` : ''}`;
+}
+async function escolherPastaBackup(){
+  if(!window.showDirectoryPicker){ showToast('Seu navegador não permite escolher pasta. Use Chrome ou Edge.', 5000); return; }
+  try{
+    const h = await window.showDirectoryPicker({ mode:'readwrite', id:'fcosta-backup' });
+    _dirHandle = h;
+    await idbSet(AUTO_DIR_KEY, h);
+    _autoStatus.pasta = 'ok';
+    await fazerBackupAutomatico(true);
+    atualizarUIAutoBackup();
+    showToast(_autoStatus.pasta==='ok' ? '✅ Pasta de backup configurada.' : 'Pasta escolhida, mas não consegui gravar nela. Tente outra pasta.', 5000);
+  }catch(e){
+    if(e && e.name==='AbortError') return;
+    console.error(e);
+    showToast('Não foi possível usar essa pasta. Crie uma pasta nova (ex.: "Backup FCosta") e escolha-a. O Chrome não aceita Downloads/Documentos diretamente.', 8000);
+  }
+}
+async function reativarPastaBackup(){
+  try{
+    const r = await _dirHandle.requestPermission({mode:'readwrite'});
+    if(r==='granted'){ await fazerBackupAutomatico(true); }
+    else showToast('Permissão negada.');
+  }catch(e){ console.error(e); showToast('Não foi possível reativar a pasta. Escolha-a novamente.'); }
+  atualizarUIAutoBackup();
+}
+
+async function lerCopiaAutomatica(key){
+  const reg = await idbGet(key);
+  const txt = await desempacotarTexto(reg);
+  const data = JSON.parse(txt);
+  const v = validarBackup(data);
+  if(!v.ok) throw new Error(v.erro);
+  return { data, resumo:v.resumo };
+}
+async function restaurarCopiaAutomatica(key){
+  let info;
+  try{ info = await lerCopiaAutomatica(key); }
+  catch(e){ showToast('Essa cópia está danificada e não pode ser usada: '+(e.message||e), 8000); return; }
+  const e = _autoMetaCache.find(x=>x.key===key);
+  const atual = contarDados(DB);
+  if(!confirm('Restaurar a cópia de '+(e?fmtDataHoraAuto(e.at):'?')+'?\n\nDados ATUAIS: '+fmtResumoDados(atual)+'\nDados da CÓPIA: '+fmtResumoDados(info.resumo)+'\n\nOs dados atuais serão substituídos (uma cópia "Antes de restaurar" é guardada antes). Continuar?')) return;
+  await aplicarBackupNoSistema(info.data, true);
+}
+/* aplica um backup já validado. guardarCopia=true guarda antes uma cópia interna dos dados atuais */
+async function aplicarBackupNoSistema(data, guardarCopia){
+  _autoPausado = false;
+  if(guardarCopia && temDadosNoDB()){
+    try{ await enfileirarAuto(()=>gravarSnapshot(['seguranca'])); }catch(e){ console.error(e); }
+  }
+  DB.products = data.products||[];
+  DB.movements = data.movements||[];
+  DB.sales = data.sales||[];
+  DB.caixaSessions = data.caixaSessions||[];
+  DB.lancamentos = data.lancamentos||[];
+  DB.contas = data.contas||[];
+  DB.suppliers = data.suppliers||[];
+  DB.clients = data.clients||[];
+  DB.employees = data.employees||[];
+  DB.settings = data.settings||DB.settings;
+  if(!DB.settings.operadores || !DB.settings.operadores.length) DB.settings.operadores=['Caixa 1'];
+  if(DB.settings.saldoInicialCaixa===undefined) DB.settings.saldoInicialCaixa = 0;
+  if(!DB.settings.saldoInicialData) DB.settings.saldoInicialData = todayISODate();
+  await Promise.all([
+    saveKey(KEYS.products, DB.products), saveKey(KEYS.movements, DB.movements),
+    saveKey(KEYS.sales, DB.sales), saveKey(KEYS.caixaSessions, DB.caixaSessions),
+    saveKey(KEYS.lancamentos, DB.lancamentos), saveKey(KEYS.contas, DB.contas), saveKey(KEYS.suppliers, DB.suppliers),
+    saveKey(KEYS.clients, DB.clients), saveKey(KEYS.employees, DB.employees), saveKey(KEYS.settings, DB.settings)
+  ]);
+  fillOperatorSelect(); renderNav(); renderContent();
+  showToast('✅ Dados restaurados com sucesso!', 6000);
+  fazerBackupAutomatico(true);
+}
+
+/* Compara o que foi carregado agora com a última cópia automática. Se faltarem muitos registros
+   (ex.: o navegador leu uma reserva antiga), protege a melhor cópia e oferece restaurar. */
+function detectarPerdaNaAbertura(){
+  const refs = _autoMetaCache.filter(e=>e.resumo && e.tipo!=='seguranca').sort((a,b)=>b.at-a.at);
+  if(!refs.length) return null;
+  const atual = contarDados(DB);
+  // melhor referência = a recente com mais registros (evita comparar com uma cópia que já estava incompleta)
+  const recentes = refs.slice(0,6);
+  const ref = recentes.reduce((m,e)=> (e.resumo.vendas+e.resumo.movimentos+e.resumo.produtos) > (m.resumo.vendas+m.resumo.movimentos+m.resumo.produtos) ? e : m, recentes[0]);
+  const caiu = (k,minDif)=> (ref.resumo[k]-atual[k])>=minDif && atual[k] < ref.resumo[k]*0.9;
+  if(caiu('vendas',20) || caiu('movimentos',20) || caiu('produtos',20)) return { ref, atual };
+  return null;
+}
+async function protegerCopia(entry){
+  try{
+    const reg = await idbGet(entry.key);
+    const key = 'pc_auto_prot_'+Date.now();
+    await idbSet(key, reg);
+    const meta = await lerAutoMeta();
+    meta.push({ key, tipo:'protegida', at:entry.at, resumo:entry.resumo, dia:entry.dia });
+    const prot = meta.filter(e=>e.tipo==='protegida').sort((a,b)=>b.at-a.at);
+    for(const velho of prot.slice(AUTO_LIMITES.protegida)){ try{ await idbDelete(velho.key); }catch(e){} meta.splice(meta.indexOf(velho),1); }
+    await gravarAutoMeta(meta);
+    return key;
+  }catch(e){ console.error('Falha ao proteger cópia', e); return null; }
+}
+async function verificarPerdaNaAbertura(){
+  const perda = detectarPerdaNaAbertura();
+  if(!perda) return;
+  _autoPausado = true;                       // não deixa cópias novas (incompletas) substituírem as boas
+  const chave = await protegerCopia(perda.ref);
+  const r = perda.ref.resumo, a = perda.atual;
+  const msg = '⚠️ ATENÇÃO: os dados carregados parecem INCOMPLETOS.\n\n'
+    + 'Agora no sistema: '+fmtResumoDados(a)+'\n'
+    + 'Na última cópia automática ('+fmtDataHoraAuto(perda.ref.at)+'): '+fmtResumoDados(r)+'\n\n'
+    + 'Isso pode acontecer quando o navegador não consegue ler tudo. Deseja RESTAURAR essa cópia agora?\n'
+    + '(OK = restaurar a cópia / Cancelar = continuar com os dados atuais)';
+  if(confirm(msg) && chave){
+    try{
+      const info = await lerCopiaAutomatica(chave);
+      await aplicarBackupNoSistema(info.data, true);
+      return;
+    }catch(e){ showToast('Não consegui ler essa cópia: '+(e.message||e), 8000); }
+  }
+  _autoPausado = false;
+  showToast('Cópia anterior guardada como "Protegida" em Cadastros → Backup, caso precise depois.', 8000);
+}
+
+async function iniciarBackupAutomatico(){
+  try{ if(navigator.storage && navigator.storage.persist) navigator.storage.persist(); }catch(e){}
+  _autoMetaCache = await lerAutoMeta();
+  try{
+    const h = await idbGet(AUTO_DIR_KEY);
+    if(h && h.queryPermission){
+      _dirHandle = h;
+      _autoStatus.pasta = (await h.queryPermission({mode:'readwrite'}))==='granted' ? 'ok' : 'permissao';
+    }
+  }catch(e){ console.error(e); }
+  setInterval(()=>fazerBackupAutomatico(false), AUTO_INTERVALO_MS);
+  document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') fazerBackupAutomatico(false); });
+  window.addEventListener('pagehide', ()=>{ fazerBackupAutomatico(false); });
+  // 1ª cópia do dia logo após abrir (se ainda não houver)
+  const hoje = todayISODate();
+  if(temDadosNoDB() && !_autoMetaCache.some(e=>e.tipo==='dia' && e.dia===hoje)){
+    setTimeout(()=>fazerBackupAutomatico(true), 8000);
+  }
+  atualizarUIAutoBackup();
+  verificarPerdaNaAbertura();
+  // Sistema abriu VAZIO mas existem cópias automáticas? Oferece recuperar.
+  if(!temDadosNoDB() && _autoMetaCache.length){
+    const candidatas = [..._autoMetaCache].filter(e=>e.tipo!=='seguranca' || true).sort((a,b)=>b.at-a.at);
+    for(const c of candidatas){
+      try{
+        const info = await lerCopiaAutomatica(c.key);
+        setTimeout(async ()=>{
+          if(confirm('⚠️ O sistema abriu SEM DADOS, mas encontrei uma cópia automática de '+fmtDataHoraAuto(c.at)+' com: '+fmtResumoDados(info.resumo)+'.\n\nDeseja RECUPERAR essa cópia agora?')){
+            await aplicarBackupNoSistema(info.data, false);
+          }
+        }, 600);
+        break;
+      }catch(e){ console.error('Cópia ignorada (danificada):', c.key, e); }
+    }
+  }
+}
+
+/* ================================================================
+   ATUALIZAÇÕES — verifica no GitHub se existe versão mais nova
+   ================================================================ */
+const APP_VERSAO = '2.4.0';
+const URL_VERSAO = 'https://raw.githubusercontent.com/serfico21-arch/pdv/main/versao.json';
+const URL_REPO_OK = 'https://github.com/serfico21-arch/pdv/';
+let _upd = { checando:false, ultima:null, info:null, erro:null, avisou:false };
+function cmpVersao(a,b){
+  const pa=String(a).split('.').map(Number), pb=String(b).split('.').map(Number);
+  for(let i=0;i<3;i++){ const d=(pa[i]||0)-(pb[i]||0); if(d) return d>0?1:-1; }
+  return 0;
+}
+async function verificarAtualizacao(manual){
+  if(_upd.checando) return;
+  if(!navigator.onLine){ if(manual) showToast('Sem internet neste momento. Tente novamente quando estiver conectado.', 5000); return; }
+  _upd.checando = true; _upd.erro = null; atualizarUIAtualizacao();
+  const ctl = new AbortController(); const t = setTimeout(()=>ctl.abort(), 10000);
+  try{
+    const r = await fetch(URL_VERSAO, { cache:'no-store', signal:ctl.signal });
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const j = await r.json();
+    if(!j || !/^\d+\.\d+\.\d+$/.test(String(j.versao||''))) throw new Error('Resposta inválida');
+    if(j.instalador && String(j.instalador).indexOf(URL_REPO_OK)!==0) throw new Error('Endereço de download não confiável');
+    if(j.html && String(j.html).indexOf(URL_REPO_OK)!==0) j.html = '';
+    _upd.ultima = Date.now();
+    _upd.info = cmpVersao(j.versao, APP_VERSAO) > 0 ? j : null;
+    if(_upd.info && !_upd.avisou){ _upd.avisou = true; showToast('🔄 Nova versão '+j.versao+' disponível! Clique em "Atualização" no topo.', 8000); }
+    if(manual && !_upd.info) showToast('✅ Você já está na versão mais recente ('+APP_VERSAO+').', 4000);
+  }catch(e){
+    _upd.erro = (e && e.name==='AbortError') ? 'Tempo esgotado' : String(e && e.message || e);
+    if(manual) showToast('Não consegui verificar atualizações agora ('+_upd.erro+').', 6000);
+  }finally{
+    clearTimeout(t); _upd.checando = false; atualizarUIAtualizacao();
+  }
+}
+function atualizarUIAtualizacao(){
+  const b = document.getElementById('updBadge');
+  if(b){
+    if(_upd.info){ b.style.display='inline-flex'; b.textContent='🔄 Atualização '+_upd.info.versao; }
+    else b.style.display='none';
+  }
+  const box = document.getElementById('updBox');
+  if(box) box.innerHTML = renderUpdBox();
+}
+function renderUpdBox(){
+  let st;
+  if(_upd.checando) st = 'Verificando…';
+  else if(_upd.info) st = '<strong style="color:var(--vermelho)">Nova versão '+escapeHtml(_upd.info.versao)+' disponível.</strong> <button class="btn btn-primary btn-sm" onclick="abrirModalAtualizacao()">Ver e atualizar</button>';
+  else if(_upd.ultima) st = '✅ Você está na versão mais recente. (verificado às '+new Date(_upd.ultima).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})+')';
+  else if(_upd.erro) st = 'Não foi possível verificar agora ('+escapeHtml(_upd.erro)+').';
+  else st = 'Ainda não verificado nesta sessão.';
+  return `<div class="small-note">Versão instalada: <strong>${APP_VERSAO}</strong> — ${st}</div>
+    <button class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="verificarAtualizacao(true)" ${_upd.checando?'disabled':''}>🔄 Verificar atualizações agora</button>`;
+}
+function abrirModalAtualizacao(){
+  const i = _upd.info; if(!i) return;
+  const notas = (Array.isArray(i.notas) ? i.notas : (i.notas ? [i.notas] : [])).map(n=>'<li>'+escapeHtml(n)+'</li>').join('');
+  document.getElementById('modalRoot').innerHTML = `
+    <div class="modal-bg" onclick="if(event.target===this) closeModal()"><div class="modal">
+      <h3>🔄 Nova versão ${escapeHtml(i.versao)} disponível</h3>
+      <p class="muted">Você está na versão ${APP_VERSAO}.</p>
+      ${notas ? '<p><strong>O que mudou:</strong></p><ul style="margin:6px 0 12px 18px;">'+notas+'</ul>' : ''}
+      <p><strong>Passo 1 —</strong> faça um backup por segurança:</p>
+      <p><button class="btn btn-outline btn-sm" onclick="baixarBackupJSON()">⬇️ Baixar backup completo agora</button></p>
+      <p><strong>Passo 2 —</strong> baixe a atualização:</p>
+      <p>${i.instalador ? '<a class="btn btn-primary btn-sm" href="'+escapeHtml(i.instalador)+'" target="_blank" rel="noopener">⬇️ Baixar instalador (Windows)</a>' : ''}
+         ${i.html ? ' <a class="btn btn-ghost btn-sm" href="'+escapeHtml(i.html)+'" target="_blank" rel="noopener">Baixar só o arquivo HTML</a>' : ''}</p>
+      <p><strong>Passo 3 —</strong> feche o sistema, execute o instalador e abra de novo pelo atalho. Seus dados continuam guardados no navegador. Se você usa o arquivo HTML solto, substitua o arquivo antigo pelo novo, na mesma pasta.</p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="closeModal()">Lembrar depois</button>
+      </div>
+    </div></div>`;
+}
+function iniciarVerificacaoAtualizacao(){
+  setTimeout(()=>verificarAtualizacao(false), 12000);
+  setInterval(()=>verificarAtualizacao(false), 6*60*60*1000);
+}
+
 function montarBackupJSON(){
   return {
     versao:1, exportadoEm: nowISO(),
@@ -6471,6 +6929,14 @@ async function baixarArquivoJSON(obj, nomeArquivo){
       const writable = await handle.createWritable();
       await writable.write(conteudo);
       await writable.close();
+      // confere se o arquivo gravado realmente abre (evita arquivo corrompido/zerado sem ninguém perceber)
+      try{
+        const f = await handle.getFile();
+        JSON.parse(await f.text());
+      }catch(errVerif){
+        alert('🚨 ATENÇÃO: o arquivo de backup foi salvo, mas NÃO consegui ler de volta — ele pode estar corrompido. Salve novamente (de preferência em outra pasta ou pen-drive) e não confie nesse arquivo.');
+        return false;
+      }
       return true;
     }catch(err){
       if(err && err.name==='AbortError') return false; // usuário cancelou de propósito
@@ -6555,45 +7021,36 @@ function onBackupFileSelected(input){
   if(!file) return;
   const reader = new FileReader();
   reader.onload = async (e)=>{
+    const texto = e.target.result || '';
+    if(!texto.trim() || /^[\s\u0000]*$/.test(texto)){
+      alert('🚨 Este arquivo está VAZIO/CORROMPIDO (só contém bytes zerados, tamanho '+Math.round(file.size/1024)+' KB). Isso costuma acontecer quando o computador desliga ou a cópia falha durante a gravação. Ele não tem dados para restaurar. Procure outro backup (outra data, pen-drive, nuvem, pasta de backup automático) ou use uma cópia automática abaixo.');
+      input.value=''; return;
+    }
     let data;
     try{
-      data = JSON.parse(e.target.result);
+      data = JSON.parse(texto);
     }catch(err){
-      showToast('Não foi possível ler o arquivo. Verifique se é um backup válido (.json).');
+      showToast('Não foi possível ler o arquivo: ele está incompleto ou danificado (não é um JSON válido). Nada foi alterado.', 8000);
       input.value=''; return;
     }
     if(Array.isArray(data)){
       showToast('⚠️ Este arquivo é uma lista de PRODUTOS (não um backup completo). Para importar produtos, use o botão "⬆️ Importar Produtos (JSON)" na aba Cadastros → Produtos. Aqui em "Restaurar backup" use o arquivo baixado em "⬇️ Baixar backup completo (JSON)".', 9000);
       input.value=''; return;
     }
-    if(!data || typeof data!=='object' || !Array.isArray(data.products)){
-      showToast('Arquivo inválido: não parece ser um backup completo deste sistema.');
-      input.value=''; return;
-    }
-    if(!confirm('Isso vai SUBSTITUIR todos os dados atuais (produtos, vendas, estoque, financeiro, contas a pagar/receber) pelos dados deste backup. Antes de continuar, vou baixar uma cópia de segurança dos dados ATUAIS, por precaução. Deseja continuar?')){ input.value=''; return; }
-      // Rede de segurança: baixa uma cópia dos dados atuais ANTES de sobrescrever, para o caso de engano.
+    const v = validarBackup(data);
+    if(!v.ok){ alert(v.erro); input.value=''; return; }
+    const atual = contarDados(DB);
+    const msg = 'Isso vai SUBSTITUIR os dados atuais pelos dados deste backup.\n\n'
+      + 'Dados ATUAIS: '+fmtResumoDados(atual)+'\n'
+      + 'Dados do BACKUP: '+fmtResumoDados(v.resumo)+'\n'
+      + (data.exportadoEm ? 'Backup gerado em: '+fmtDataHoraAuto(new Date(data.exportadoEm).getTime())+'\n' : '')
+      + '\nAntes, o sistema guarda uma cópia dos dados atuais. Deseja continuar?';
+    if(!confirm(msg)){ input.value=''; return; }
+    // Rede de segurança: guarda cópia interna e (se houver dados) baixa um arquivo com os dados atuais ANTES de sobrescrever.
+    if(temDadosNoDB()){
       await baixarArquivoJSON(montarBackupJSON(), 'seguranca-antes-de-restaurar-'+todayISODate()+'-'+Date.now()+'.json');
-      DB.products = data.products||[];
-      DB.movements = data.movements||[];
-      DB.sales = data.sales||[];
-      DB.caixaSessions = data.caixaSessions||[];
-      DB.lancamentos = data.lancamentos||[];
-      DB.contas = data.contas||[];
-      DB.suppliers = data.suppliers||[];
-      DB.clients = data.clients||[];
-      DB.employees = data.employees||[];
-      DB.settings = data.settings||DB.settings;
-      if(!DB.settings.operadores || !DB.settings.operadores.length) DB.settings.operadores=['Caixa 1'];
-      if(DB.settings.saldoInicialCaixa===undefined) DB.settings.saldoInicialCaixa = 0;
-      if(!DB.settings.saldoInicialData) DB.settings.saldoInicialData = todayISODate();
-      await Promise.all([
-        saveKey(KEYS.products, DB.products), saveKey(KEYS.movements, DB.movements),
-        saveKey(KEYS.sales, DB.sales), saveKey(KEYS.caixaSessions, DB.caixaSessions),
-        saveKey(KEYS.lancamentos, DB.lancamentos), saveKey(KEYS.contas, DB.contas), saveKey(KEYS.suppliers, DB.suppliers),
-        saveKey(KEYS.clients, DB.clients), saveKey(KEYS.employees, DB.employees), saveKey(KEYS.settings, DB.settings)
-      ]);
-      showToast('✅ Backup restaurado com sucesso! Uma cópia de segurança dos dados anteriores também foi baixada.', 6000);
-      fillOperatorSelect(); renderContent();
+    }
+    await aplicarBackupNoSistema(data, true);
     input.value='';
   };
   reader.readAsText(file);
@@ -6927,14 +7384,147 @@ function abrirManualAjuda(){
     </div>`;
 }
 
+/* ---------------- Licença (ativação por cliente) ----------------
+   A chave é assinada por você (ECDSA P-256) e amarrada ao ID desta instalação.
+   Aqui só existe a chave PÚBLICA: serve para conferir, nunca para criar licenças. */
+const LIC_PUB = { kty:'EC', crv:'P-256', x:'fRYCp4u_w5oTMKKsqqM4EKdDZMO6fcJN0paQPLb1v9w', y:'fCzZ900C6KuiM8Lq5DnDtciJAKA-NhhmDBqRpav3_fI', ext:true };
+const LIC_TRIAL_DIAS = 15;
+const LIC_CONTATO = 'Para obter sua chave de ativação, fale com o FCosta Gestor e informe o ID acima.';
+const K_LIC = { id:'pc_lic_id', chave:'pc_lic_chave', trial:'pc_lic_trial', visto:'pc_lic_visto' };
+let _lic = { id:'', est:null, resolve:null };
+
+function licDias(de, ate){
+  const a = new Date(de+'T00:00:00'), b = new Date(ate+'T00:00:00');
+  return Math.round((b-a)/86400000);
+}
+function licDataBR(iso){ return iso ? iso.split('-').reverse().join('/') : ''; }
+function licB64(s){
+  s = s.replace(/-/g,'+').replace(/_/g,'/');
+  while(s.length%4) s += '=';
+  const bin = atob(s), u = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) u[i] = bin.charCodeAt(i);
+  return u;
+}
+function licNovoId(){
+  const al = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789', r = new Uint8Array(12);
+  crypto.getRandomValues(r);
+  let s = '';
+  for(let i=0;i<12;i++){ s += al[r[i]%al.length]; if(i===3||i===7) s += '-'; }
+  return s;
+}
+async function licVerificar(texto){
+  const t = String(texto||'').replace(/\s+/g,'');
+  if(!/^FCG1-[\w-]+\.[\w-]+$/.test(t)) return { ok:false, motivo:'Chave em formato inválido. Cole a chave inteira, começando por FCG1-.' };
+  if(!(window.crypto && crypto.subtle)) return { ok:false, motivo:'Este navegador não permite conferir a chave. Abra o sistema no Chrome ou Edge.' };
+  try{
+    const [p, s] = t.slice(5).split('.');
+    const payload = licB64(p), sig = licB64(s);
+    const k = await crypto.subtle.importKey('jwk', LIC_PUB, { name:'ECDSA', namedCurve:'P-256' }, false, ['verify']);
+    const ok = await crypto.subtle.verify({ name:'ECDSA', hash:'SHA-256' }, k, sig, payload);
+    if(!ok) return { ok:false, motivo:'Chave inválida (assinatura não confere).' };
+    const d = JSON.parse(new TextDecoder().decode(payload));
+    if(String(d.id||'').replace(/-/g,'') !== _lic.id.replace(/-/g,'')) return { ok:false, motivo:'Esta chave foi emitida para outro computador/instalação.' };
+    return { ok:true, dados:d };
+  }catch(e){ return { ok:false, motivo:'Chave inválida.' }; }
+}
+async function licAvaliar(){
+  if(!_lic.id){
+    _lic.id = await loadKey(K_LIC.id, '');
+    if(!_lic.id){ _lic.id = licNovoId(); await saveKey(K_LIC.id, _lic.id); }
+  }
+  const hoje = todayISODate();
+  let visto = await loadKey(K_LIC.visto, '');
+  const relogioVoltou = !!visto && licDias(visto, hoje) < 0;   // data do computador foi voltada
+  if(!relogioVoltou && visto !== hoje) await saveKey(K_LIC.visto, hoje);
+
+  const chave = await loadKey(K_LIC.chave, '');
+  if(chave){
+    const r = await licVerificar(chave);
+    if(r.ok){
+      const d = r.dados;
+      if(!d.expira) return { tipo:'ativa', dados:d };
+      if(!relogioVoltou && licDias(hoje, d.expira) >= 0) return { tipo:'ativa', dados:d, restam:licDias(hoje, d.expira) };
+      return { tipo:'expirada', dados:d, motivo: relogioVoltou ? 'A data do computador foi alterada. Corrija a data e reabra o sistema.' : 'Sua licença venceu em '+licDataBR(d.expira)+'. Peça a renovação.' };
+    }
+  }
+  let ini = await loadKey(K_LIC.trial, '');
+  if(!ini){ ini = hoje; await saveKey(K_LIC.trial, ini); }
+  const usados = relogioVoltou ? LIC_TRIAL_DIAS : Math.max(0, licDias(ini, hoje));
+  const restam = LIC_TRIAL_DIAS - usados;
+  if(restam > 0) return { tipo:'teste', restam };
+  return { tipo:'teste_fim', motivo:'O período de teste de '+LIC_TRIAL_DIAS+' dias terminou. Ative o sistema para continuar.' };
+}
+function licAtualizarBadge(){
+  const b = document.getElementById('licBadge'); if(!b) return;
+  const e = _lic.est; let txt = '';
+  if(e && e.tipo==='teste') txt = '⏳ Teste: '+e.restam+(e.restam===1?' dia':' dias');
+  else if(e && e.tipo==='ativa' && e.restam!==undefined && e.restam<=30) txt = '🔑 Licença vence em '+e.restam+(e.restam===1?' dia':' dias');
+  b.textContent = txt; b.style.display = txt ? '' : 'none';
+}
+function licFechar(){
+  const el = document.getElementById('licTela'); if(el) el.remove();
+  if(_lic.resolve){ const r = _lic.resolve; _lic.resolve = null; r(); }
+}
+function licMostrar(fechavel){
+  const e = _lic.est, bloqueado = (e.tipo==='expirada' || e.tipo==='teste_fim');
+  let el = document.getElementById('licTela'); if(el) el.remove();
+  el = document.createElement('div'); el.id = 'licTela';
+  el.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(20,16,12,.94);display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto;font-family:system-ui,"Segoe UI",Roboto,Arial,sans-serif;';
+  let status = '';
+  if(e.tipo==='ativa') status = '<p style="color:#2e7d32;font-weight:600;margin:0 0 6px">✅ Sistema ativado</p><p style="margin:0 0 12px;font-size:.92rem">Licenciado para: <strong>'+escapeHtml(e.dados.cliente)+'</strong><br>Validade: <strong>'+(e.dados.expira ? licDataBR(e.dados.expira) : 'vitalícia')+'</strong></p>';
+  else if(e.tipo==='teste') status = '<p style="margin:0 0 12px">⏳ Período de teste: restam <strong>'+e.restam+(e.restam===1?' dia':' dias')+'</strong>.</p>';
+  else status = '<p style="color:#b2402f;font-weight:600;margin:0 0 12px">'+escapeHtml(e.motivo)+'</p>';
+  const continuar = (e.tipo==='teste') ? '<button class="btn btn-ghost" onclick="licFechar()">Continuar no teste</button>' : (fechavel && !bloqueado ? '<button class="btn btn-ghost" onclick="licFechar()">Fechar</button>' : '');
+  el.innerHTML = '<div style="background:#fff;color:#2b2622;max-width:520px;width:100%;border-radius:14px;padding:24px 26px;box-shadow:0 10px 40px rgba(0,0,0,.5)">'
+    + '<h2 style="margin:0 0 4px;font-size:1.3rem">🔑 Ativação do FCosta Gestor</h2><div style="height:10px"></div>' + status
+    + '<p style="margin:0 0 4px;font-size:.85rem;color:#6d645b">ID desta instalação:</p>'
+    + '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px"><code id="licIdTxt" style="flex:1;font-size:1.15rem;font-weight:700;letter-spacing:1px;background:#faf7f2;border:1px solid #e5ddd2;border-radius:8px;padding:8px 10px;user-select:all">'+escapeHtml(_lic.id)+'</code><button class="btn btn-ghost btn-sm" onclick="licCopiarId()">Copiar</button></div>'
+    + '<p style="margin:0 0 14px;font-size:.85rem;color:#6d645b">'+escapeHtml(LIC_CONTATO)+'</p>'
+    + '<textarea id="licChave" rows="4" placeholder="Cole aqui a chave de ativação (FCG1-...)" style="width:100%;box-sizing:border-box;border:1px solid #cfc5b8;border-radius:8px;padding:8px;font:12px/1.4 monospace;resize:vertical"></textarea>'
+    + '<p id="licErro" style="color:#b2402f;margin:6px 0 0;font-size:.9rem;min-height:1.2em"></p>'
+    + '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap">'+continuar+'<button class="btn btn-primary" onclick="licAtivar()">Ativar</button></div></div>';
+  document.body.appendChild(el);
+}
+function licCopiarId(){
+  try{ navigator.clipboard.writeText(_lic.id); showToast('ID copiado.'); }
+  catch(e){ const r = document.createRange(); r.selectNodeContents(document.getElementById('licIdTxt')); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+}
+async function licAtivar(){
+  const txt = document.getElementById('licChave').value, erro = document.getElementById('licErro');
+  const r = await licVerificar(txt);
+  if(!r.ok){ erro.textContent = r.motivo; return; }
+  await saveKey(K_LIC.chave, txt.replace(/\s+/g,''));
+  _lic.est = await licAvaliar();
+  if(_lic.est.tipo!=='ativa'){ erro.textContent = _lic.est.motivo || 'Esta chave não está mais válida.'; licMostrar(false); return; }
+  licAtualizarBadge(); licFechar(); showToast('✅ Sistema ativado. Obrigado!', 4000);
+}
+function abrirModalLicenca(){ if(_lic.est) licMostrar(true); }
+async function garantirLicenca(){
+  _lic.est = await licAvaliar();
+  licAtualizarBadge();
+  await new Promise(res=>{
+    if(_lic.est.tipo==='ativa') return res();
+    _lic.resolve = res; licMostrar(false);
+  });
+  setInterval(async ()=>{            // revalida enquanto o sistema fica aberto (virada de dia, vencimento)
+    try{
+      _lic.est = await licAvaliar(); licAtualizarBadge();
+      if((_lic.est.tipo==='expirada' || _lic.est.tipo==='teste_fim') && !document.getElementById('licTela')) licMostrar(false);
+    }catch(e){ /* ignora */ }
+  }, 30*60*1000);
+}
+
 /* ---------------- Inicialização ---------------- */
 (async function init(){
   await loadAll();
+  await garantirLicenca();
   fillOperatorSelect();
   updateBrandMark();
   aplicarLarguraImpressao();
   renderNav();
   renderContent();
+  iniciarBackupAutomatico();
+  iniciarVerificacaoAtualizacao();
 })();
 </script>
 </body>

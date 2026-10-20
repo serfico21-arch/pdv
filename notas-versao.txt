@@ -1,0 +1,5 @@
+Ativação por licença: cada instalação precisa de uma chave (teste grátis de 15 dias)
+Backup automático: cópias a cada 3 minutos dentro do sistema e opção de pasta no computador
+Restauração de backup agora recusa arquivos vazios ou corrompidos
+Aviso quando o sistema abre com dados incompletos e opção de restaurar a última cópia
+Avisos de nova versão dentro do sistema
