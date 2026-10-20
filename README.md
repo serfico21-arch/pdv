@@ -13,7 +13,7 @@ Gestor de frente de caixa, estoque e financeiro. Funciona offline, no navegador 
 certutil -hashfile FCostaGestor-Instalador.exe SHA256
 ```
 
-Deve resultar em: `<!--SHA-->b3f10c0de6e8a6df359bf94049b2b34b69b05b77aace4d11111f272d80b44540<!--/SHA-->`
+Deve resultar em: `<!--SHA-->7904311b7e796e50e27d72cff503fda1387c34d7b7bf965ad87f1ec43f4051f7<!--/SHA-->`
 
 ## Atenção com os dados
 
