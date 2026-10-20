@@ -47,5 +47,5 @@ Abra a execução com erro e leia a última linha do log. Os motivos mais comuns
 | `notas-versao.txt` | Novidades mostradas ao usuário |
 | `versao.json` | Gerado sozinho: versão mais nova (o sistema lê este arquivo) |
 | `FCostaGestor-Instalador.exe` | Gerado sozinho a partir do HTML |
-| `instalador/` | Script do instalador, ícone e ferramentas de build |
+| `instalador.nsi`, `icon.ico`, `modern-wizard.bmp`, `construir.sh`, `publicar.py` | Script do instalador, ícone, imagem e ferramentas de build |
 | `.github/workflows/construir-instalador.yml` | Receita da construção automática |

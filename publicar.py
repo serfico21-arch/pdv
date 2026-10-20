@@ -5,7 +5,7 @@
 """
 import sys, re, json, hashlib, datetime, pathlib
 
-RAIZ = pathlib.Path(__file__).resolve().parent.parent
+RAIZ = pathlib.Path(__file__).resolve().parent
 HTML = RAIZ / "fcosta-gestor.html"
 EXE = RAIZ / "FCostaGestor-Instalador.exe"
 BASE = "https://github.com/serfico21-arch/pdv/raw/main/"

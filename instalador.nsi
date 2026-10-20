@@ -1,5 +1,5 @@
 ; Instalador do FCosta Gestor (NSIS). Construído automaticamente pelo GitHub Actions
-; (veja .github/workflows/construir-instalador.yml) ou localmente com instalador/construir.sh
+; (veja .github/workflows/construir-instalador.yml) ou localmente com construir.sh
 Unicode true
 SetCompressor /SOLID lzma
 !include "MUI2.nsh"
@@ -10,7 +10,7 @@ SetCompressor /SOLID lzma
 !define APP_NOME "FCosta Gestor"
 
 Name "${APP_NOME}"
-OutFile "../FCostaGestor-Instalador.exe"
+OutFile "FCostaGestor-Instalador.exe"
 InstallDir "$PROGRAMFILES\FCosta Gestor"
 InstallDirRegKey HKLM "Software\FCosta Gestor" "Install_Dir"
 RequestExecutionLevel admin
@@ -41,7 +41,7 @@ VIAddVersionKey /LANG=1046 "LegalCopyright" "FCosta Gestor"
 
 Section "Instalar"
   SetOutPath "$INSTDIR"
-  File "../fcosta-gestor.html"
+  File "fcosta-gestor.html"
   File "icon.ico"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 

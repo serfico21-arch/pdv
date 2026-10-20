@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Constrói o instalador (Linux/macOS/WSL). Requer: nsis (makensis) e python3. Opcional: 7zip para conferir.
 set -euo pipefail
-cd "$(dirname "$0")/.."
-VERSAO="$(python3 instalador/publicar.py versao)"
+cd "$(dirname "$0")"
+VERSAO="$(python3 publicar.py versao)"
 echo ">> Construindo instalador da versão $VERSAO"
-makensis -V2 -DAPP_VERSAO="$VERSAO" instalador/instalador.nsi
+makensis -V2 -DAPP_VERSAO="$VERSAO" instalador.nsi
 test -s FCostaGestor-Instalador.exe || { echo "ERRO: instalador não foi gerado"; exit 1; }
 if command -v 7z >/dev/null 2>&1; then
   7z t FCostaGestor-Instalador.exe | tee /tmp/7z-teste.txt | tail -3
@@ -13,5 +13,5 @@ if command -v 7z >/dev/null 2>&1; then
   cmp "$TMP/fcosta-gestor.html" fcosta-gestor.html || { echo "ERRO: HTML dentro do instalador difere do original"; exit 1; }
   rm -rf "$TMP"
 fi
-python3 instalador/publicar.py publicar
+python3 publicar.py publicar
 echo ">> Pronto."
