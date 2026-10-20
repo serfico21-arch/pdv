@@ -2315,15 +2315,15 @@ var qrcode = function() {
 </script>
 <style>
 :root{
-  --verde-900:#0d3b2e; --verde-800:#125a3f; --verde-700:#187a52; --verde-600:#1f9866;
+  --verde-900:#0b2a52; --verde-800:#11427f; --verde-700:#1a5fb4; --verde-600:#2f7fd6;
   --creme:#f3f6f2; --creme-2:#e8ede5; --papel:#fefffd;
   --terracota:#f2c400; --terracota-esc:#c99f00; --ouro:#f5db3d;
   --tinta:#1b2320; --linha:#dbe3d8; --vermelho:#b2402f; --azul:#2b5b73;
-  --sombra:0 10px 30px -12px rgba(13,59,46,0.35); --radius:14px;
+  --sombra:0 10px 30px -12px rgba(11,42,82,0.35); --radius:14px;
 }
 *{box-sizing:border-box;}
 html,body{margin:0;padding:0; height:100%; overflow:hidden;}
-body{font-family:'Public Sans',sans-serif; background:radial-gradient(1200px 600px at 100% -10%, #0d3b2e 0%, transparent 60%), var(--creme); color:var(--tinta); min-height:100vh;}
+body{font-family:'Public Sans',sans-serif; background:radial-gradient(1200px 600px at 100% -10%, #0b2a52 0%, transparent 60%), var(--creme); color:var(--tinta); min-height:100vh;}
 h1,h2,h3,h4{font-family:'Fraunces',serif; margin:0; letter-spacing:-0.01em;}
 button{font-family:inherit; cursor:pointer;}
 input,select{font-family:inherit;}
@@ -5403,7 +5403,7 @@ function pdfCabecalho(doc, titulo){
     }catch(e){ /* se a imagem falhar, segue sem logo no PDF */ }
   }
   doc.setFontSize(13);
-  doc.setTextColor(13,59,46);
+  doc.setTextColor(11,42,82);
   doc.setFont(undefined,'bold');
   doc.text(s.storeName || 'FCosta', xTexto, 13);
   doc.setFont(undefined,'normal');
@@ -5412,10 +5412,10 @@ function pdfCabecalho(doc, titulo){
   const linhaLoja = [s.cnpj?('CNPJ: '+s.cnpj):'', s.endereco||'', s.telefone?('Tel: '+s.telefone):''].filter(Boolean).join('  ·  ');
   if(linhaLoja) doc.text(linhaLoja, xTexto, 18);
   doc.setFontSize(14);
-  doc.setTextColor(13,59,46);
+  doc.setTextColor(11,42,82);
   doc.text(titulo, xTexto, linhaLoja?25:22);
   yLinhaBase = (linhaLoja?28:25);
-  doc.setDrawColor(13,59,46);
+  doc.setDrawColor(11,42,82);
   doc.setLineWidth(0.5);
   doc.line(14, yLinhaBase, 196, yLinhaBase);
   doc.setTextColor(20,20,20);
@@ -5423,7 +5423,7 @@ function pdfCabecalho(doc, titulo){
 }
 function pdfSubtituloDoc(doc, y, txt){
   doc.setFontSize(12);
-  doc.setTextColor(13,59,46);
+  doc.setTextColor(11,42,82);
   doc.text(txt, 14, y);
   doc.setTextColor(20,20,20);
   return y + 6;
@@ -5435,7 +5435,7 @@ function pdfTabelaIndicadores(doc, y, linhas){
     body: linhas,
     theme:'grid',
     styles:{fontSize:10, cellPadding:3},
-    headStyles:{fillColor:[13,59,46], textColor:255},
+    headStyles:{fillColor:[11,42,82], textColor:255},
     margin:{left:14, right:14}
   });
   return doc.lastAutoTable.finalY + 10;
