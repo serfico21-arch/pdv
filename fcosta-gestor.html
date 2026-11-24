@@ -2603,6 +2603,7 @@ tr:last-child td{border-bottom:none;}
         </div>
       </div>
       <div class="right-tools">
+        <span id="versaoBadge" onclick="mostrarVersaoAtualizada(true)" title="Versão do gestor instalada neste computador" style="cursor:pointer; background:#eed600; color:#14206b; font-size:18px; font-weight:800; padding:6px 14px; border-radius:12px; letter-spacing:0.02em; box-shadow:0 0 0 3px rgba(255,255,255,0.35); white-space:nowrap;"></span>
         <select class="op-select" id="opSelect" onchange="setOperator(this.value)"></select>
         <span class="lock-badge" id="saveWarnBadge" style="display:none; background:rgba(178,64,47,0.3); color:#ffb3a3;">🚨 Falha ao salvar — não feche o sistema</span>
         <span class="lock-badge" id="updBadge" style="display:none; cursor:pointer; background:rgba(217,164,65,0.35); color:#fff3d1;" onclick="abrirModalAtualizacao()" title="Clique para ver a atualização"></span>
@@ -7185,7 +7186,7 @@ async function iniciarBackupAutomatico(){
 /* ================================================================
    ATUALIZAÇÕES — verifica no GitHub se existe versão mais nova
    ================================================================ */
-const APP_VERSAO = '2.5.3';
+const APP_VERSAO = '2.5.4';
 const URL_VERSAO = 'https://raw.githubusercontent.com/serfico21-arch/pdv/main/versao.json';
 const URL_REPO_OK = 'https://github.com/serfico21-arch/pdv/';
 let _upd = { checando:false, ultima:null, info:null, erro:null, avisou:false };
@@ -7927,7 +7928,35 @@ async function aplicarResetAcesso(){
   renderContent();
   iniciarBackupAutomatico();
   iniciarVerificacaoAtualizacao();
+  mostrarVersaoNoTopo();
+  setTimeout(()=>mostrarVersaoAtualizada(false), 1200);
 })();
+/* ---- Versão grande e destacada: no topo sempre, e uma janela grande quando o gestor é atualizado ---- */
+function mostrarVersaoNoTopo(){
+  const b = document.getElementById('versaoBadge'); if(b) b.textContent = 'Versão ' + APP_VERSAO;
+}
+function mostrarVersaoAtualizada(forcar, tentativa){
+  let vista = null; try{ vista = localStorage.getItem('pc_versao_aberta'); }catch(e){}
+  if(!forcar && vista === APP_VERSAO) return;
+  if(!forcar && document.querySelector('#modalRoot .modal-bg')){ // espera a outra janela (ex.: licença) fechar
+    if((tentativa||0) < 120) setTimeout(()=>mostrarVersaoAtualizada(false, (tentativa||0)+1), 1000);
+    return;
+  }
+  try{ localStorage.setItem('pc_versao_aberta', APP_VERSAO); }catch(e){}
+  document.getElementById('modalRoot').innerHTML = `
+    <div class="modal-bg" onclick="if(event.target===this) closeModal()">
+      <div class="modal" style="text-align:center; max-width:520px;">
+        <div style="font-size:64px; line-height:1;">${forcar?'ℹ️':'✅'}</div>
+        <div style="font-size:26px; font-weight:800; margin-top:10px; color:#14206b;">${forcar?'Versão instalada':'Gestor atualizado!'}</div>
+        <div style="display:inline-block; margin:18px 0 8px; background:#eed600; color:#14206b; font-size:44px; font-weight:900; padding:10px 28px; border-radius:16px;">Versão ${APP_VERSAO}</div>
+        <div class="muted" style="font-size:16px; margin-bottom:18px;">Este é o número que aparece em amarelo no topo da tela.</div>
+        <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+          <button class="btn btn-outline" onclick="closeModal(); verificarAtualizacao(true)">🔄 Ver se tem versão mais nova</button>
+          <button class="btn btn-primary" onclick="closeModal()">OK</button>
+        </div>
+      </div>
+    </div>`;
+}
 </script>
 </body>
 </html>
