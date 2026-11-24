@@ -2829,7 +2829,10 @@ function showToast(msg, ms=3000){
   root.appendChild(el); setTimeout(()=>el.remove(), ms);
 }
 function escapeHtml(s){ return String(s??'').replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
-function normalizarBusca(s){ return String(s??'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
+function normalizarBusca(s){ return String(s??'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
+// Chaves para achar cadastro repetido: código só com números e sem zeros na frente; nome sem acento, pontuação e espaço extra ("5 kg" = "5kg").
+function chaveCodigo(b){ return String(b??'').replace(/\D/g,'').replace(/^0+/,''); }
+function chaveNome(n){ return normalizarBusca(n).replace(/(\d)\s*[,.]\s*(\d)/g,'$1_$2').replace(/(\d)\s+(kg|g|gr|grs|ml|l|lt|lts|un|und|unid|cx|pct)\b/g,'$1$2').replace(/[^a-z0-9_]+/g,' ').trim(); }
 
 /* ================================================================
    PIX — geração do código "Copia e Cola" (BR Code / EMV) e do QR Code
@@ -5676,6 +5679,80 @@ function renderCadastros(){
     ${cadSubTab==='config'?renderConfigCad():''}
   `;
 }
+// ---------- Produtos repetidos: achar e juntar (o estoque é somado, nada se perde) ----------
+function gruposDuplicados(){
+  const prods = DB.products||[], pai = {};
+  const raiz = id => { while(pai[id]!==id){ pai[id]=pai[pai[id]]; id=pai[id]; } return id; };
+  prods.forEach(p=>pai[p.id]=p.id);
+  const porChave = {};
+  prods.forEach(p=>{
+    const c = chaveCodigo(p.barcode), n = chaveNome(p.name);
+    [c?'c:'+c:null, n?'n:'+n:null].forEach(k=>{ if(!k) return; if(porChave[k]) pai[raiz(p.id)] = raiz(porChave[k]); else porChave[k]=p.id; });
+  });
+  const grupos = {};
+  prods.forEach(p=>{ const r = raiz(p.id); (grupos[r]=grupos[r]||[]).push(p); });
+  return Object.values(grupos).filter(g=>g.length>1);
+}
+function melhorDoGrupo(g){
+  // fica o mais completo: com código, com foto, com preço; empate: o cadastrado primeiro
+  const nota = p => (chaveCodigo(p.barcode)?4:0) + (p.photoBase64?2:0) + ((p.price||0)>0?1:0);
+  return [...g].sort((a,b)=> nota(b)-nota(a) || String(a.createdAt||'').localeCompare(String(b.createdAt||'')))[0];
+}
+function abrirDuplicados(){
+  const grupos = gruposDuplicados();
+  if(!grupos.length){ showToast('✅ Nenhum produto repetido.'); closeModal(); renderContent(); return; }
+  const linha = (p, gi, marcado) => `<label style="display:flex; gap:10px; align-items:center; padding:8px; border:1px solid #e3ddd0; border-radius:10px; margin:6px 0; cursor:pointer;">
+      <input type="radio" name="dupG${gi}" value="${p.id}" ${marcado?'checked':''}>
+      ${p.photoBase64?`<img class="prod-thumb" src="${p.photoBase64}">`:'<span class="prod-thumb-empty">📦</span>'}
+      <span style="flex:1;"><b>${escapeHtml(p.name)}</b><br><span class="small-note">Código: ${escapeHtml(p.barcode||'—')} · Preço: ${brl(p.price)} · Custo: ${brl(p.cost)} · Estoque: <b>${p.stock||0}</b></span></span>
+    </label>`;
+  document.getElementById('modalRoot').innerHTML = `
+    <div class="modal-bg" onclick="if(event.target===this) closeModal()">
+      <div class="modal wide">
+        <div class="flexbet"><h3>🧹 Produtos repetidos (${grupos.length})</h3><button class="btn btn-ghost btn-sm" onclick="closeModal()">Fechar ✕</button></div>
+        <div class="small-note">Em cada grupo, marque o cadastro que <b>fica</b> (o preço dele é o que vale). O <b>estoque dos repetidos é somado</b> nele, e as vendas e movimentações antigas passam para ele. Antes de juntar, o sistema guarda uma cópia de segurança.</div>
+        ${grupos.map((g,gi)=>{ const m = melhorDoGrupo(g); return `<div class="card" style="margin:12px 0; padding:12px;">
+          <div class="flexbet"><b>Grupo ${gi+1} — ${g.length} cadastros · estoque somado: ${Math.round(g.reduce((s,p)=>s+(Number(p.stock)||0),0)*1000)/1000}</b>
+          <button class="btn btn-outline btn-sm" onclick="juntarGrupoDuplicado(${gi})">Juntar este grupo</button></div>
+          ${g.map(p=>linha(p,gi,p.id===m.id)).join('')}</div>`; }).join('')}
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
+          <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" onclick="juntarTodosDuplicados()">Juntar todos os grupos</button>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('modalRoot')._grupos = grupos;
+}
+function juntarEmMemoria(manter, repetidos){
+  const ids = new Set(repetidos.map(p=>p.id));
+  manter.stock = Math.round(([manter,...repetidos].reduce((s,p)=>s+(Number(p.stock)||0),0))*1000)/1000;
+  for(const r of repetidos){
+    if(!chaveCodigo(manter.barcode) && chaveCodigo(r.barcode)) manter.barcode = r.barcode;
+    if(!manter.photoBase64 && r.photoBase64) manter.photoBase64 = r.photoBase64;
+    if(!manter.brand && r.brand) manter.brand = r.brand;
+    if(!manter.category && r.category) manter.category = r.category;
+    if(!manter.supplierId && r.supplierId) manter.supplierId = r.supplierId;
+    if(!(manter.cost>0) && r.cost>0) manter.cost = r.cost;
+    manter.minStock = Math.max(Number(manter.minStock)||0, Number(r.minStock)||0);
+  }
+  (DB.movements||[]).forEach(m=>{ if(ids.has(m.productId)) m.productId = manter.id; });
+  (DB.sales||[]).forEach(s=>(s.items||[]).forEach(i=>{ if(ids.has(i.productId)) i.productId = manter.id; }));
+  DB.products = DB.products.filter(p=>!ids.has(p.id));
+}
+async function juntarGrupos(indices){
+  const root = document.getElementById('modalRoot'), grupos = root._grupos||[];
+  const escolhas = indices.map(gi=>{ const g = grupos[gi]; const sel = root.querySelector(`input[name="dupG${gi}"]:checked`);
+    const manter = g.find(p=>p.id===(sel&&sel.value)) || melhorDoGrupo(g); return {manter, repetidos:g.filter(p=>p.id!==manter.id)}; });
+  const total = escolhas.reduce((s,e)=>s+e.repetidos.length,0);
+  if(!confirm('Juntar '+escolhas.length+' grupo(s)? '+total+' cadastro(s) repetido(s) serão juntados, somando o estoque. Uma cópia de segurança é guardada antes.')) return;
+  try{ await fazerBackupAutomatico(true); }catch(e){}
+  escolhas.forEach(e=>juntarEmMemoria(e.manter, e.repetidos));
+  await Promise.all([saveKey(KEYS.products, DB.products), saveKey(KEYS.movements, DB.movements), saveKey(KEYS.sales, DB.sales)]);
+  showToast('✅ Pronto: '+total+' cadastro(s) repetido(s) juntado(s). Estoque somado.', 6000);
+  if(gruposDuplicados().length) abrirDuplicados(); else { closeModal(); renderContent(); }
+}
+function juntarGrupoDuplicado(gi){ return juntarGrupos([gi]); }
+function juntarTodosDuplicados(){ const g = document.getElementById('modalRoot')._grupos||[]; return juntarGrupos(g.map((_,i)=>i)); }
 function renderProdutosCad(){
   const todos = [...DB.products].sort((a,b)=>a.name.localeCompare(b.name));
   const termo = normalizarBusca(filtroProdutosCad.trim());
@@ -5698,6 +5775,7 @@ function renderProdutosCad(){
         <button class="btn btn-primary" onclick="openProductModal()">+ Novo Produto</button>
       </div>
     </div>
+    ${(()=>{ const n = gruposDuplicados().length; return n ? `<div class="small-note" style="margin-top:12px; background:#fff4d6; border:1px solid #e8c766; padding:10px 12px; border-radius:10px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">⚠️ Achei <b>${n}</b> produto(s) cadastrado(s) mais de uma vez (mesmo código de barras ou mesmo nome). <button class="btn btn-primary btn-sm" onclick="abrirDuplicados()">🧹 Ver e juntar repetidos</button></div>` : ''; })()}
     <div class="small-note" style="margin-bottom:14px;">
       A importação <strong>mescla</strong> com o que já existe: produtos com o mesmo código de barras (ou, na falta dele, o mesmo nome) são atualizados (preço, custo, estoque); só produtos realmente novos entram como cadastro novo — nunca cria duplicado. Nenhum outro dado do sistema (clientes, fornecedores, vendas, financeiro) é afetado.
       ⚠️ Aqui é só para uma lista de produtos — arquivo <span class="mono">produtos-fcosta-...json</span>. Se o seu arquivo é o backup completo do sistema (nome começa com <span class="mono">backup-completo-fcosta-</span>), use "Restaurar backup" em Cadastros → Configurações, não aqui.
@@ -6012,9 +6090,10 @@ async function saveProduct(id){
   const minStock = parseFloat(document.getElementById('mMin').value)||0;
   const photoBase64 = document.getElementById('mFotoBase64').value || null;
   if(!name || price<=0){ showToast('Informe ao menos o nome e o preço de venda.'); return; }
-  if(barcode && DB.products.some(p=>p.barcode===barcode && p.id!==id)){ showToast('Já existe um produto com esse código de barras.'); return; }
-  const nomeNorm = normalizarBusca(name);
-  const duplicado = DB.products.find(p=>normalizarBusca(p.name)===nomeNorm && p.id!==id);
+  const mesmoCodigo = barcode && chaveCodigo(barcode) ? DB.products.find(p=>p.id!==id && chaveCodigo(p.barcode)===chaveCodigo(barcode)) : null;
+  if(mesmoCodigo){ showToast('❌ Não é permitido cadastro duplicado. Esse código de barras já é do produto "'+mesmoCodigo.name+'". Abra esse produto para editar.', 9000); return; }
+  const nomeNorm = chaveNome(name);
+  const duplicado = DB.products.find(p=>chaveNome(p.name)===nomeNorm && p.id!==id);
   if(duplicado){
     showToast('❌ Não é permitido cadastro duplicado. Já existe um produto chamado "'+duplicado.name+'" (estoque atual: '+duplicado.stock+'). Se for o mesmo produto, cancele e use "Estoque → Entrada de Mercadoria" para somar a quantidade. Se for um produto diferente, mude o nome (ex: inclua marca, tamanho ou variação) antes de salvar.', 9000);
     return;
@@ -6084,8 +6163,8 @@ function onImportarProdutosSelected(input){
       const category = (item.category||item.categoria||'').toString().trim();
       const brand = (item.brand||item.marca||'').toString().trim();
       const saleType = (item.saleType==='peso' || (item.und||'').toString().toUpperCase()==='KG') ? 'peso' : 'unidade';
-      const existente = (barcode ? DB.products.find(p=>p.barcode===barcode) : null)
-        || DB.products.find(p=>normalizarBusca(p.name)===normalizarBusca(name));
+      const existente = (chaveCodigo(barcode) ? DB.products.find(p=>chaveCodigo(p.barcode)===chaveCodigo(barcode)) : null)
+        || DB.products.find(p=>chaveNome(p.name)===chaveNome(name));
       if(existente){
         existente.cost = cost || existente.cost;
         existente.price = price;
