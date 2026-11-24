@@ -5745,10 +5745,13 @@ function openProductModal(id, prefilledBarcode, prefilledName){
               <input type="file" accept="image/*" style="display:none;" onchange="onProdutoFotoSelected(this)">
             </label>
             <button type="button" class="btn btn-outline btn-sm" id="btnBuscarFoto" onclick="buscarFotoProduto()" title="Procura a foto da embalagem na internet pelo código de barras (ou pelo nome)">🔎 Buscar foto na internet</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="abrirGoogleImagens()" title="Abre o Google Imagens já pesquisando este produto">🖼️ Procurar no Google Imagens</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="colarFotoProduto()" title="Cola aqui a foto que você copiou (botão direito na foto > Copiar imagem)">📋 Colar foto copiada</button>
             <button type="button" class="btn btn-danger btn-sm" id="btnRemoverFoto" onclick="removerFotoProduto()" style="${p&&p.photoBase64?'':'display:none;'}">Remover foto</button>
             <input type="hidden" id="mFotoBase64" value="${p&&p.photoBase64?escapeHtml(p.photoBase64):''}">
           </div>
         </div>
+        <div class="small-note" style="margin:-6px 0 14px;">💡 No Google: clique com o <b>botão direito</b> na foto &gt; <b>Copiar imagem</b>. Volte aqui e aperte <b>Ctrl+V</b> (ou "Colar foto copiada"). Também pode <b>arrastar</b> a foto para o quadrinho. O tamanho é ajustado sozinho.</div>
         <div class="field"><label>Nome do produto</label><input id="mNome" value="${p?escapeHtml(p.name):escapeHtml(prefilledName||'')}" placeholder="Ex: Arroz 5kg"></div>
         <div class="grid2" style="gap:12px;">
           <div class="field"><label>Marca</label><input id="mMarca" value="${p?escapeHtml(p.brand||''):''}" placeholder="Ex: Camil, Nestlé..."></div>
@@ -5896,6 +5899,71 @@ async function buscarFotoProduto(){
     if(btn){ btn.disabled = false; btn.textContent = textoBtn; }
   }
 }
+// ---------- Foto pelo Google Imagens: abrir a pesquisa, colar (Ctrl+V) ou arrastar ----------
+function abrirGoogleImagens(){
+  const nome = (document.getElementById('mNome')?.value||'').trim();
+  const marca = (document.getElementById('mMarca')?.value||'').trim();
+  const codigo = (document.getElementById('mBarcode')?.value||'').replace(/\D/g,'');
+  let q = nome ? (nome + (marca && !normalizarBusca(nome).includes(normalizarBusca(marca)) ? ' '+marca : '')) : codigo;
+  if(!q){ showToast('Digite o nome do produto primeiro.'); return; }
+  window.open('https://www.google.com/search?tbm=isch&q='+encodeURIComponent(q), '_blank');
+  showToast('No Google: botão direito na foto > Copiar imagem. Depois volte aqui e aperte Ctrl+V.', 8000);
+}
+function blobParaDataUrl(blob){
+  return new Promise((ok, falha)=>{ const fr = new FileReader(); fr.onload = ()=>ok(fr.result); fr.onerror = falha; fr.readAsDataURL(blob); });
+}
+async function usarBlobFoto(blob){
+  try{ mostrarFotoProduto(await reduzirFoto(await blobParaDataUrl(blob))); showToast('Foto colocada! Confira e clique em Salvar.'); return true; }
+  catch(e){ showToast('Não consegui ler essa imagem. Tente copiar outra foto.'); return false; }
+}
+async function usarLinkFoto(url){
+  if(!/^(https?:|data:image\/)/i.test(url||'')) return false;
+  try{
+    if(/^data:image\//i.test(url)){ mostrarFotoProduto(await reduzirFoto(url)); showToast('Foto colocada! Confira e clique em Salvar.'); return true; }
+    const r = await fetch(url); if(!r.ok) throw new Error('foto');
+    const b = await r.blob(); if(!/^image\//.test(b.type)) throw new Error('tipo');
+    return await usarBlobFoto(b);
+  }catch(e){
+    showToast('Esse site não deixa puxar a foto assim. No Google, use botão direito > Copiar imagem e aperte Ctrl+V aqui.', 9000);
+    return false;
+  }
+}
+async function colarFotoProduto(){
+  try{
+    const itens = await navigator.clipboard.read();
+    for(const it of itens){
+      const tipo = it.types.find(t=>t.startsWith('image/'));
+      if(tipo){ await usarBlobFoto(await it.getType(tipo)); return; }
+    }
+    for(const it of itens){
+      if(it.types.includes('text/plain')){ const t = (await (await it.getType('text/plain')).text()).trim(); if(await usarLinkFoto(t)) return; }
+    }
+    showToast('Não achei foto copiada. No Google: botão direito na foto > Copiar imagem.', 7000);
+  }catch(e){
+    showToast('Aperte Ctrl+V aqui na tela do produto para colar a foto.', 6000);
+  }
+}
+document.addEventListener('paste', async (ev)=>{
+  if(!document.getElementById('prodFotoPreview') || !ev.clipboardData) return;
+  const arq = Array.from(ev.clipboardData.items||[]).find(i=>i.kind==='file' && i.type.startsWith('image/'));
+  if(arq){ ev.preventDefault(); await usarBlobFoto(arq.getAsFile()); return; }
+  const alvo = ev.target, emCampo = alvo && (alvo.tagName==='INPUT' || alvo.tagName==='TEXTAREA');
+  const html = ev.clipboardData.getData('text/html') || '';
+  const m = html.match(/<img[^>]+src="([^"]+)"/i);
+  if(m && !emCampo){ ev.preventDefault(); await usarLinkFoto(m[1].replace(/&amp;/g,'&')); }
+});
+document.addEventListener('dragover', (ev)=>{ if(document.getElementById('prodFotoPreview')) ev.preventDefault(); });
+document.addEventListener('drop', async (ev)=>{
+  if(!document.getElementById('prodFotoPreview')) return;
+  ev.preventDefault();
+  const dt = ev.dataTransfer; if(!dt) return;
+  const f = Array.from(dt.files||[]).find(x=>x.type.startsWith('image/'));
+  if(f){ await usarBlobFoto(f); return; }
+  const html = dt.getData('text/html') || '';
+  const m = html.match(/<img[^>]+src="([^"]+)"/i);
+  const link = m ? m[1].replace(/&amp;/g,'&') : (dt.getData('text/uri-list')||dt.getData('text/plain')||'').split('\n')[0].trim();
+  if(link) await usarLinkFoto(link);
+});
 function removerFotoProduto(){
   document.getElementById('mFotoBase64').value = '';
   document.getElementById('prodFotoPreview').innerHTML = '<span>Sem foto</span>';
@@ -6905,7 +6973,7 @@ async function iniciarBackupAutomatico(){
 /* ================================================================
    ATUALIZAÇÕES — verifica no GitHub se existe versão mais nova
    ================================================================ */
-const APP_VERSAO = '2.5.0';
+const APP_VERSAO = '2.5.1';
 const URL_VERSAO = 'https://raw.githubusercontent.com/serfico21-arch/pdv/main/versao.json';
 const URL_REPO_OK = 'https://github.com/serfico21-arch/pdv/';
 let _upd = { checando:false, ultima:null, info:null, erro:null, avisou:false };
