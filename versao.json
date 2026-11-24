@@ -1,10 +1,15 @@
 {
-  "versao": "2.5.0",
+  "versao": "2.5.1",
   "data": "2026-11-24",
   "instalador": "https://github.com/serfico21-arch/pdv/raw/main/FCostaGestor-Instalador.exe",
   "html": "https://github.com/serfico21-arch/pdv/raw/main/fcosta-gestor.html",
-  "sha256": "afcd3acc5ce0e13526be4bedb42c15696031cc4b89e6f972f54a4072467d3c41",
+  "sha256": "e9b868e22ab911ba20435982381f99a9e963706689578db42f480260657cc9fe",
   "notas": [
+    "Produtos repetidos: o sistema não deixa cadastrar o mesmo código de barras ou o mesmo nome duas vezes (mesmo com espaço, zero na frente ou acento diferente)",
+    "Produtos repetidos já cadastrados: botão \"Ver e juntar repetidos\" em Cadastros > Produtos (soma o estoque, nada se perde)",
+    "Fotos: botão \"Achar foto sozinho\" coloca a foto do produto pelo nome (ex.: Arroz Camil) e mostra outras para escolher com um toque",
+    "Fotos: botão \"Procurar no Google Imagens\" abre a pesquisa do produto",
+    "Fotos: copie a imagem no Google e aperte Ctrl+V no cadastro (ou arraste) — o tamanho é ajustado sozinho",
     "Fotos dos produtos: botão \"Buscar foto na internet\" acha a foto pelo código de barras ou pelo nome",
     "Fotos grandes do celular agora são diminuídas sozinhas (até 25MB)",
     "Removido o link \"ambiente de teste\" da tela (a página não existia)",
