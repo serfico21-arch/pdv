@@ -1,10 +1,11 @@
 {
-  "versao": "2.5.2",
+  "versao": "2.5.3",
   "data": "2026-11-24",
   "instalador": "https://github.com/serfico21-arch/pdv/raw/main/FCostaGestor-Instalador.exe",
   "html": "https://github.com/serfico21-arch/pdv/raw/main/fcosta-gestor.html",
-  "sha256": "7e8e85eef7395f5ec8f6bec7c94e37ebdaf7b7c61f9a0ad5798e47250f4fc0fc",
+  "sha256": "788501a8bdcab2eaee0b67167695da4a83728b20e82d5c791e9f2825004d0a3a",
   "notas": [
+    "Cadastro pelo código de barras: ao bipar, nome, marca, categoria e foto são preenchidos sozinhos (preço e estoque continuam com você)",
     "Aviso ao administrador explicando as novidades (fotos e produtos repetidos)",
     "Produtos repetidos: o sistema não deixa cadastrar o mesmo código de barras ou o mesmo nome duas vezes (mesmo com espaço, zero na frente ou acento diferente)",
     "Produtos repetidos já cadastrados: botão \"Ver e juntar repetidos\" em Cadastros > Produtos (soma o estoque, nada se perde)",
