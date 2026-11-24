@@ -5744,7 +5744,8 @@ function openProductModal(id, prefilledBarcode, prefilledName){
               📷 ${p&&p.photoBase64?'Trocar foto':'Adicionar foto'}
               <input type="file" accept="image/*" style="display:none;" onchange="onProdutoFotoSelected(this)">
             </label>
-            ${p&&p.photoBase64?'<button type="button" class="btn btn-danger btn-sm" onclick="removerFotoProduto()">Remover foto</button>':''}
+            <button type="button" class="btn btn-outline btn-sm" id="btnBuscarFoto" onclick="buscarFotoProduto()" title="Procura a foto da embalagem na internet pelo código de barras (ou pelo nome)">🔎 Buscar foto na internet</button>
+            <button type="button" class="btn btn-danger btn-sm" id="btnRemoverFoto" onclick="removerFotoProduto()" style="${p&&p.photoBase64?'':'display:none;'}">Remover foto</button>
             <input type="hidden" id="mFotoBase64" value="${p&&p.photoBase64?escapeHtml(p.photoBase64):''}">
           </div>
         </div>
@@ -5813,21 +5814,92 @@ async function lerBarcodeCadastro(){
     setTimeout(()=>{ if(stream.getVideoTracks()[0].readyState==='live') stream.getTracks().forEach(t=>t.stop()); }, 8000);
   }catch(e){ showToast('Não foi possível acessar a câmera.'); }
 }
+function mostrarFotoProduto(dataUrl){
+  document.getElementById('mFotoBase64').value = dataUrl;
+  document.getElementById('prodFotoPreview').innerHTML = `<img src="${dataUrl}">`;
+  const rm = document.getElementById('btnRemoverFoto'); if(rm) rm.style.display='';
+}
+// Diminui a foto (no máximo 600px, JPG) para não pesar no sistema, no backup e no site.
+function reduzirFoto(dataUrl, max){
+  max = max || 600;
+  return new Promise((ok, falha)=>{
+    const img = new Image();
+    img.onload = ()=>{
+      const esc = Math.min(1, max/Math.max(img.naturalWidth, img.naturalHeight));
+      const w = Math.max(1, Math.round(img.naturalWidth*esc)), h = Math.max(1, Math.round(img.naturalHeight*esc));
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0,0,w,h); // fundo branco para PNG transparente
+      ctx.drawImage(img, 0, 0, w, h);
+      ok(c.toDataURL('image/jpeg', 0.82));
+    };
+    img.onerror = ()=> falha(new Error('imagem'));
+    img.src = dataUrl;
+  });
+}
 function onProdutoFotoSelected(input){
   const file = input.files[0];
   if(!file) return;
-  if(file.size > 2*1024*1024){ showToast('Imagem muito grande. Use um arquivo de até 2MB.'); return; }
+  if(file.size > 25*1024*1024){ showToast('Imagem muito grande. Use um arquivo de até 25MB.'); input.value=''; return; }
   const reader = new FileReader();
-  reader.onload = (e)=>{
-    document.getElementById('mFotoBase64').value = e.target.result;
-    document.getElementById('prodFotoPreview').innerHTML = `<img src="${e.target.result}">`;
+  reader.onload = async (e)=>{
+    try{ mostrarFotoProduto(await reduzirFoto(e.target.result)); }
+    catch(err){ showToast('Não foi possível ler essa imagem. Tente outro arquivo (JPG ou PNG).'); }
   };
   reader.readAsDataURL(file);
   input.value='';
 }
+// Busca a foto da embalagem no Open Food Facts (gratuito). Só mexe na foto deste produto.
+async function buscarFotoProduto(){
+  const btn = document.getElementById('btnBuscarFoto');
+  const codigo = (document.getElementById('mBarcode').value||'').replace(/\D/g,'');
+  const nome = (document.getElementById('mNome').value||'').trim();
+  const marca = (document.getElementById('mMarca').value||'').trim();
+  if(!codigo && !nome){ showToast('Digite o código de barras ou o nome do produto primeiro.'); return; }
+  const textoBtn = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Procurando...'; }
+  try{
+    let url = '', peloNome = false;
+    if(codigo.length >= 8){
+      const r = await fetch('https://world.openfoodfacts.org/api/v2/product/'+codigo+'.json?fields=image_front_url,image_url');
+      if(r.ok){ const d = await r.json(); if(d && d.product) url = d.product.image_front_url || d.product.image_url || ''; }
+    }
+    if(!url && nome){
+      // Pelo nome: usa as palavras principais (sem medidas) e prefere produto do Brasil.
+      const tira = /^(kg|g|gr|ml|l|lt|un|und|unid|pct|pacote|cx|caixa|com|sem|tipo|de|da|do|das|dos|e|em)$/i;
+      const pal = (nome+' '+marca).split(/[^0-9A-Za-zÀ-ÿ]+/).filter(w=>w.length>1 && !tira.test(w) && !/^\d/.test(w));
+      const escolhe = lista => { lista = (lista||[]).filter(x=>x.image_front_url);
+        return lista.find(x=>/^(789|790)/.test(String(x.code||'')) || (x.countries_tags||[]).some(c=>/brazil/.test(c))) || null; };
+      const tentativas = [pal.slice(0,4).join(' '), pal.slice(0,2).join(' ')].filter((q,i,arr)=>q && arr.indexOf(q)===i);
+      for(const q of tentativas){
+        let achado = null;
+        for(let vez=0; vez<2 && !achado; vez++){
+          try{
+            const r = await fetch('https://world.openfoodfacts.org/cgi/search.pl?search_terms='+encodeURIComponent(q)+'&search_simple=1&action=process&json=1&page_size=20&fields=code,image_front_url,countries_tags');
+            if(r.ok){ achado = escolhe((await r.json()).products); break; }
+          }catch(e){}
+          await new Promise(ok=>setTimeout(ok,1500)); // site ocupado: espera um pouco e tenta de novo
+        }
+        if(achado){ url = achado.image_front_url; peloNome = true; break; }
+      }
+    }
+    if(!url){ showToast('Não achei foto para este produto. Você pode tirar uma foto e usar "Adicionar foto".', 6000); return; }
+    const img = await fetch(url);
+    if(!img.ok) throw new Error('foto');
+    const blob = await img.blob();
+    const dataUrl = await new Promise((ok, falha)=>{ const fr = new FileReader(); fr.onload = ()=>ok(fr.result); fr.onerror = falha; fr.readAsDataURL(blob); });
+    mostrarFotoProduto(await reduzirFoto(dataUrl));
+    showToast(peloNome ? 'Foto encontrada pelo nome. Confira se é o produto certo e clique em Salvar.' : 'Foto encontrada! Confira e clique em Salvar.', 6000);
+  }catch(err){
+    showToast('Não consegui buscar a foto agora. Confira a internet e tente de novo.', 6000);
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = textoBtn; }
+  }
+}
 function removerFotoProduto(){
   document.getElementById('mFotoBase64').value = '';
   document.getElementById('prodFotoPreview').innerHTML = '<span>Sem foto</span>';
+  const rm = document.getElementById('btnRemoverFoto'); if(rm) rm.style.display='none';
 }
 async function saveProduct(id){
   const name = document.getElementById('mNome').value.trim();
@@ -6833,7 +6905,7 @@ async function iniciarBackupAutomatico(){
 /* ================================================================
    ATUALIZAÇÕES — verifica no GitHub se existe versão mais nova
    ================================================================ */
-const APP_VERSAO = '2.4.2';
+const APP_VERSAO = '2.5.0';
 const URL_VERSAO = 'https://raw.githubusercontent.com/serfico21-arch/pdv/main/versao.json';
 const URL_REPO_OK = 'https://github.com/serfico21-arch/pdv/';
 let _upd = { checando:false, ultima:null, info:null, erro:null, avisou:false };
