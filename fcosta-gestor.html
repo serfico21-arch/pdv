@@ -2829,7 +2829,10 @@ function showToast(msg, ms=3000){
   root.appendChild(el); setTimeout(()=>el.remove(), ms);
 }
 function escapeHtml(s){ return String(s??'').replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
-function normalizarBusca(s){ return String(s??'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
+function normalizarBusca(s){ return String(s??'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
+// Chaves para achar cadastro repetido: código só com números e sem zeros na frente; nome sem acento, pontuação e espaço extra ("5 kg" = "5kg").
+function chaveCodigo(b){ return String(b??'').replace(/\D/g,'').replace(/^0+/,''); }
+function chaveNome(n){ return normalizarBusca(n).replace(/(\d)\s*[,.]\s*(\d)/g,'$1_$2').replace(/(\d)\s+(kg|g|gr|grs|ml|l|lt|lts|un|und|unid|cx|pct)\b/g,'$1$2').replace(/[^a-z0-9_]+/g,' ').trim(); }
 
 /* ================================================================
    PIX — geração do código "Copia e Cola" (BR Code / EMV) e do QR Code
@@ -5676,6 +5679,80 @@ function renderCadastros(){
     ${cadSubTab==='config'?renderConfigCad():''}
   `;
 }
+// ---------- Produtos repetidos: achar e juntar (o estoque é somado, nada se perde) ----------
+function gruposDuplicados(){
+  const prods = DB.products||[], pai = {};
+  const raiz = id => { while(pai[id]!==id){ pai[id]=pai[pai[id]]; id=pai[id]; } return id; };
+  prods.forEach(p=>pai[p.id]=p.id);
+  const porChave = {};
+  prods.forEach(p=>{
+    const c = chaveCodigo(p.barcode), n = chaveNome(p.name);
+    [c?'c:'+c:null, n?'n:'+n:null].forEach(k=>{ if(!k) return; if(porChave[k]) pai[raiz(p.id)] = raiz(porChave[k]); else porChave[k]=p.id; });
+  });
+  const grupos = {};
+  prods.forEach(p=>{ const r = raiz(p.id); (grupos[r]=grupos[r]||[]).push(p); });
+  return Object.values(grupos).filter(g=>g.length>1);
+}
+function melhorDoGrupo(g){
+  // fica o mais completo: com código, com foto, com preço; empate: o cadastrado primeiro
+  const nota = p => (chaveCodigo(p.barcode)?4:0) + (p.photoBase64?2:0) + ((p.price||0)>0?1:0);
+  return [...g].sort((a,b)=> nota(b)-nota(a) || String(a.createdAt||'').localeCompare(String(b.createdAt||'')))[0];
+}
+function abrirDuplicados(){
+  const grupos = gruposDuplicados();
+  if(!grupos.length){ showToast('✅ Nenhum produto repetido.'); closeModal(); renderContent(); return; }
+  const linha = (p, gi, marcado) => `<label style="display:flex; gap:10px; align-items:center; padding:8px; border:1px solid #e3ddd0; border-radius:10px; margin:6px 0; cursor:pointer;">
+      <input type="radio" name="dupG${gi}" value="${p.id}" ${marcado?'checked':''}>
+      ${p.photoBase64?`<img class="prod-thumb" src="${p.photoBase64}">`:'<span class="prod-thumb-empty">📦</span>'}
+      <span style="flex:1;"><b>${escapeHtml(p.name)}</b><br><span class="small-note">Código: ${escapeHtml(p.barcode||'—')} · Preço: ${brl(p.price)} · Custo: ${brl(p.cost)} · Estoque: <b>${p.stock||0}</b></span></span>
+    </label>`;
+  document.getElementById('modalRoot').innerHTML = `
+    <div class="modal-bg" onclick="if(event.target===this) closeModal()">
+      <div class="modal wide">
+        <div class="flexbet"><h3>🧹 Produtos repetidos (${grupos.length})</h3><button class="btn btn-ghost btn-sm" onclick="closeModal()">Fechar ✕</button></div>
+        <div class="small-note">Em cada grupo, marque o cadastro que <b>fica</b> (o preço dele é o que vale). O <b>estoque dos repetidos é somado</b> nele, e as vendas e movimentações antigas passam para ele. Antes de juntar, o sistema guarda uma cópia de segurança.</div>
+        ${grupos.map((g,gi)=>{ const m = melhorDoGrupo(g); return `<div class="card" style="margin:12px 0; padding:12px;">
+          <div class="flexbet"><b>Grupo ${gi+1} — ${g.length} cadastros · estoque somado: ${Math.round(g.reduce((s,p)=>s+(Number(p.stock)||0),0)*1000)/1000}</b>
+          <button class="btn btn-outline btn-sm" onclick="juntarGrupoDuplicado(${gi})">Juntar este grupo</button></div>
+          ${g.map(p=>linha(p,gi,p.id===m.id)).join('')}</div>`; }).join('')}
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:8px;">
+          <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+          <button class="btn btn-primary" onclick="juntarTodosDuplicados()">Juntar todos os grupos</button>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('modalRoot')._grupos = grupos;
+}
+function juntarEmMemoria(manter, repetidos){
+  const ids = new Set(repetidos.map(p=>p.id));
+  manter.stock = Math.round(([manter,...repetidos].reduce((s,p)=>s+(Number(p.stock)||0),0))*1000)/1000;
+  for(const r of repetidos){
+    if(!chaveCodigo(manter.barcode) && chaveCodigo(r.barcode)) manter.barcode = r.barcode;
+    if(!manter.photoBase64 && r.photoBase64) manter.photoBase64 = r.photoBase64;
+    if(!manter.brand && r.brand) manter.brand = r.brand;
+    if(!manter.category && r.category) manter.category = r.category;
+    if(!manter.supplierId && r.supplierId) manter.supplierId = r.supplierId;
+    if(!(manter.cost>0) && r.cost>0) manter.cost = r.cost;
+    manter.minStock = Math.max(Number(manter.minStock)||0, Number(r.minStock)||0);
+  }
+  (DB.movements||[]).forEach(m=>{ if(ids.has(m.productId)) m.productId = manter.id; });
+  (DB.sales||[]).forEach(s=>(s.items||[]).forEach(i=>{ if(ids.has(i.productId)) i.productId = manter.id; }));
+  DB.products = DB.products.filter(p=>!ids.has(p.id));
+}
+async function juntarGrupos(indices){
+  const root = document.getElementById('modalRoot'), grupos = root._grupos||[];
+  const escolhas = indices.map(gi=>{ const g = grupos[gi]; const sel = root.querySelector(`input[name="dupG${gi}"]:checked`);
+    const manter = g.find(p=>p.id===(sel&&sel.value)) || melhorDoGrupo(g); return {manter, repetidos:g.filter(p=>p.id!==manter.id)}; });
+  const total = escolhas.reduce((s,e)=>s+e.repetidos.length,0);
+  if(!confirm('Juntar '+escolhas.length+' grupo(s)? '+total+' cadastro(s) repetido(s) serão juntados, somando o estoque. Uma cópia de segurança é guardada antes.')) return;
+  try{ await fazerBackupAutomatico(true); }catch(e){}
+  escolhas.forEach(e=>juntarEmMemoria(e.manter, e.repetidos));
+  await Promise.all([saveKey(KEYS.products, DB.products), saveKey(KEYS.movements, DB.movements), saveKey(KEYS.sales, DB.sales)]);
+  showToast('✅ Pronto: '+total+' cadastro(s) repetido(s) juntado(s). Estoque somado.', 6000);
+  if(gruposDuplicados().length) abrirDuplicados(); else { closeModal(); renderContent(); }
+}
+function juntarGrupoDuplicado(gi){ return juntarGrupos([gi]); }
+function juntarTodosDuplicados(){ const g = document.getElementById('modalRoot')._grupos||[]; return juntarGrupos(g.map((_,i)=>i)); }
 function renderProdutosCad(){
   const todos = [...DB.products].sort((a,b)=>a.name.localeCompare(b.name));
   const termo = normalizarBusca(filtroProdutosCad.trim());
@@ -5698,6 +5775,7 @@ function renderProdutosCad(){
         <button class="btn btn-primary" onclick="openProductModal()">+ Novo Produto</button>
       </div>
     </div>
+    ${(()=>{ const n = gruposDuplicados().length; return n ? `<div class="small-note" style="margin-top:12px; background:#fff4d6; border:1px solid #e8c766; padding:10px 12px; border-radius:10px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">⚠️ Achei <b>${n}</b> produto(s) cadastrado(s) mais de uma vez (mesmo código de barras ou mesmo nome). <button class="btn btn-primary btn-sm" onclick="abrirDuplicados()">🧹 Ver e juntar repetidos</button></div>` : ''; })()}
     <div class="small-note" style="margin-bottom:14px;">
       A importação <strong>mescla</strong> com o que já existe: produtos com o mesmo código de barras (ou, na falta dele, o mesmo nome) são atualizados (preço, custo, estoque); só produtos realmente novos entram como cadastro novo — nunca cria duplicado. Nenhum outro dado do sistema (clientes, fornecedores, vendas, financeiro) é afetado.
       ⚠️ Aqui é só para uma lista de produtos — arquivo <span class="mono">produtos-fcosta-...json</span>. Se o seu arquivo é o backup completo do sistema (nome começa com <span class="mono">backup-completo-fcosta-</span>), use "Restaurar backup" em Cadastros → Configurações, não aqui.
@@ -5744,11 +5822,15 @@ function openProductModal(id, prefilledBarcode, prefilledName){
               📷 ${p&&p.photoBase64?'Trocar foto':'Adicionar foto'}
               <input type="file" accept="image/*" style="display:none;" onchange="onProdutoFotoSelected(this)">
             </label>
-            <button type="button" class="btn btn-outline btn-sm" id="btnBuscarFoto" onclick="buscarFotoProduto()" title="Procura a foto da embalagem na internet pelo código de barras (ou pelo nome)">🔎 Buscar foto na internet</button>
+            <button type="button" class="btn btn-outline btn-sm" id="btnBuscarFoto" onclick="buscarFotoProduto()" title="Procura a foto da embalagem na internet pelo código de barras (ou pelo nome)">🔎 Achar foto sozinho</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="abrirGoogleImagens()" title="Abre o Google Imagens já pesquisando este produto">🖼️ Procurar no Google Imagens</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="colarFotoProduto()" title="Cola aqui a foto que você copiou (botão direito na foto > Copiar imagem)">📋 Colar foto copiada</button>
             <button type="button" class="btn btn-danger btn-sm" id="btnRemoverFoto" onclick="removerFotoProduto()" style="${p&&p.photoBase64?'':'display:none;'}">Remover foto</button>
             <input type="hidden" id="mFotoBase64" value="${p&&p.photoBase64?escapeHtml(p.photoBase64):''}">
           </div>
         </div>
+        <div id="fotoOpcoes" style="display:none; margin:-4px 0 12px;"></div>
+        <div class="small-note" style="margin:-6px 0 14px;">💡 O mais fácil: <b>🔎 Achar foto sozinho</b> (pelo código de barras ou pelo nome). Se não achar, use o Google: <b>botão direito</b> na foto &gt; <b>Copiar imagem</b>. Volte aqui e aperte <b>Ctrl+V</b> (ou "Colar foto copiada"). Também pode <b>arrastar</b> a foto para o quadrinho. O tamanho é ajustado sozinho.</div>
         <div class="field"><label>Nome do produto</label><input id="mNome" value="${p?escapeHtml(p.name):escapeHtml(prefilledName||'')}" placeholder="Ex: Arroz 5kg"></div>
         <div class="grid2" style="gap:12px;">
           <div class="field"><label>Marca</label><input id="mMarca" value="${p?escapeHtml(p.brand||''):''}" placeholder="Ex: Camil, Nestlé..."></div>
@@ -5864,38 +5946,132 @@ async function buscarFotoProduto(){
       const r = await fetch('https://world.openfoodfacts.org/api/v2/product/'+codigo+'.json?fields=image_front_url,image_url');
       if(r.ok){ const d = await r.json(); if(d && d.product) url = d.product.image_front_url || d.product.image_url || ''; }
     }
+    let opcoes = [];
     if(!url && nome){
       // Pelo nome: usa as palavras principais (sem medidas) e prefere produto do Brasil.
       const tira = /^(kg|g|gr|ml|l|lt|un|und|unid|pct|pacote|cx|caixa|com|sem|tipo|de|da|do|das|dos|e|em)$/i;
       const pal = (nome+' '+marca).split(/[^0-9A-Za-zÀ-ÿ]+/).filter(w=>w.length>1 && !tira.test(w) && !/^\d/.test(w));
-      const escolhe = lista => { lista = (lista||[]).filter(x=>x.image_front_url);
-        return lista.find(x=>/^(789|790)/.test(String(x.code||'')) || (x.countries_tags||[]).some(c=>/brazil/.test(c))) || null; };
+      const doBrasil = x => /^(789|790)/.test(String(x.code||'')) || (x.countries_tags||[]).some(c=>/brazil/.test(c));
       const tentativas = [pal.slice(0,4).join(' '), pal.slice(0,2).join(' ')].filter((q,i,arr)=>q && arr.indexOf(q)===i);
+      const vistos = new Set();
       for(const q of tentativas){
-        let achado = null;
-        for(let vez=0; vez<2 && !achado; vez++){
+        for(let vez=0; vez<3; vez++){
           try{
-            const r = await fetch('https://world.openfoodfacts.org/cgi/search.pl?search_terms='+encodeURIComponent(q)+'&search_simple=1&action=process&json=1&page_size=20&fields=code,image_front_url,countries_tags');
-            if(r.ok){ achado = escolhe((await r.json()).products); break; }
+            const r = await fetch('https://world.openfoodfacts.org/cgi/search.pl?search_terms='+encodeURIComponent(q)+'&search_simple=1&action=process&json=1&page_size=24&fields=code,product_name,brands,image_front_url,image_front_small_url,countries_tags');
+            if(r.ok){
+              const lista = ((await r.json()).products||[]).filter(x=>x.image_front_url);
+              // Ordena: mais palavras do nome batendo, começa com a 1ª palavra (ex.: "arroz"), e do Brasil.
+              const pn = pal.map(normalizarBusca);
+              const nota = x => { const n0 = normalizarBusca(x.product_name||'').trim(), mb = normalizarBusca(x.brands||'');
+                return pn.reduce((t,w)=> t + (n0.includes(w) ? 3 : (mb.includes(w) ? 1 : 0)), 0) + (pn[0] && n0.startsWith(pn[0]) ? 3 : 0) + (doBrasil(x)?1:0); };
+              lista.sort((x,y)=>nota(y)-nota(x));
+              for(const x of lista){ if(!vistos.has(x.image_front_url) && opcoes.length<8){ vistos.add(x.image_front_url); opcoes.push({grande:x.image_front_url, pequena:x.image_front_small_url||x.image_front_url}); } }
+              break;
+            }
           }catch(e){}
           await new Promise(ok=>setTimeout(ok,1500)); // site ocupado: espera um pouco e tenta de novo
         }
-        if(achado){ url = achado.image_front_url; peloNome = true; break; }
+        if(opcoes.length>=4) break;
       }
+      if(opcoes.length){ url = opcoes[0].grande; peloNome = true; }
     }
-    if(!url){ showToast('Não achei foto para este produto. Você pode tirar uma foto e usar "Adicionar foto".', 6000); return; }
-    const img = await fetch(url);
-    if(!img.ok) throw new Error('foto');
-    const blob = await img.blob();
-    const dataUrl = await new Promise((ok, falha)=>{ const fr = new FileReader(); fr.onload = ()=>ok(fr.result); fr.onerror = falha; fr.readAsDataURL(blob); });
-    mostrarFotoProduto(await reduzirFoto(dataUrl));
-    showToast(peloNome ? 'Foto encontrada pelo nome. Confira se é o produto certo e clique em Salvar.' : 'Foto encontrada! Confira e clique em Salvar.', 6000);
+    if(!url){ showToast('Não achei foto para este produto. Use "Procurar no Google Imagens".', 6000); return; }
+    await colocarFotoDoLink(url);
+    mostrarOpcoesFoto(opcoes);
+    showToast(peloNome ? (opcoes.length>1 ? 'Coloquei a 1ª foto. Se não for a certa, toque em outra logo abaixo. Depois clique em Salvar.' : 'Foto encontrada pelo nome. Confira e clique em Salvar.') : 'Foto encontrada! Confira e clique em Salvar.', 7000);
   }catch(err){
     showToast('Não consegui buscar a foto agora. Confira a internet e tente de novo.', 6000);
   }finally{
     if(btn){ btn.disabled = false; btn.textContent = textoBtn; }
   }
 }
+// ---------- Foto pelo Google Imagens: abrir a pesquisa, colar (Ctrl+V) ou arrastar ----------
+async function colocarFotoDoLink(url){
+  const img = await fetch(url);
+  if(!img.ok) throw new Error('foto');
+  mostrarFotoProduto(await reduzirFoto(await blobParaDataUrl(await img.blob())));
+}
+function mostrarOpcoesFoto(opcoes){
+  const box = document.getElementById('fotoOpcoes'); if(!box) return;
+  if(!opcoes || opcoes.length<2){ box.innerHTML=''; box.style.display='none'; return; }
+  box.style.display='';
+  box.innerHTML = '<div class="small-note" style="margin:0 0 6px;">Outras fotos achadas — toque na certa:</div>'+
+    '<div style="display:flex; flex-wrap:wrap; gap:8px;">'+opcoes.map((o,i)=>
+      `<button type="button" onclick="escolherOpcaoFoto(${i})" style="width:72px;height:72px;padding:0;border:2px solid ${i===0?'#1f5fbf':'#d8d2c4'};border-radius:10px;background:#fff;cursor:pointer;overflow:hidden;"><img src="${escapeHtml(o.pequena)}" style="width:100%;height:100%;object-fit:contain;" alt=""></button>`).join('')+'</div>';
+  box._opcoes = opcoes;
+}
+async function escolherOpcaoFoto(i){
+  const box = document.getElementById('fotoOpcoes'); const o = box && box._opcoes && box._opcoes[i]; if(!o) return;
+  try{
+    await colocarFotoDoLink(o.grande);
+    box.querySelectorAll('button').forEach((b,j)=>{ b.style.borderColor = j===i ? '#1f5fbf' : '#d8d2c4'; });
+    showToast('Foto trocada. Clique em Salvar.');
+  }catch(e){ showToast('Não consegui pegar essa foto. Tente outra.'); }
+}
+function abrirGoogleImagens(){
+  const nome = (document.getElementById('mNome')?.value||'').trim();
+  const marca = (document.getElementById('mMarca')?.value||'').trim();
+  const codigo = (document.getElementById('mBarcode')?.value||'').replace(/\D/g,'');
+  let q = nome ? (nome + (marca && !normalizarBusca(nome).includes(normalizarBusca(marca)) ? ' '+marca : '')) : codigo;
+  if(!q){ showToast('Digite o nome do produto primeiro.'); return; }
+  window.open('https://www.google.com/search?tbm=isch&q='+encodeURIComponent(q), '_blank');
+  showToast('No Google: botão direito na foto > Copiar imagem. Depois volte aqui e aperte Ctrl+V.', 8000);
+}
+function blobParaDataUrl(blob){
+  return new Promise((ok, falha)=>{ const fr = new FileReader(); fr.onload = ()=>ok(fr.result); fr.onerror = falha; fr.readAsDataURL(blob); });
+}
+async function usarBlobFoto(blob){
+  try{ mostrarFotoProduto(await reduzirFoto(await blobParaDataUrl(blob))); showToast('Foto colocada! Confira e clique em Salvar.'); return true; }
+  catch(e){ showToast('Não consegui ler essa imagem. Tente copiar outra foto.'); return false; }
+}
+async function usarLinkFoto(url){
+  if(!/^(https?:|data:image\/)/i.test(url||'')) return false;
+  try{
+    if(/^data:image\//i.test(url)){ mostrarFotoProduto(await reduzirFoto(url)); showToast('Foto colocada! Confira e clique em Salvar.'); return true; }
+    const r = await fetch(url); if(!r.ok) throw new Error('foto');
+    const b = await r.blob(); if(!/^image\//.test(b.type)) throw new Error('tipo');
+    return await usarBlobFoto(b);
+  }catch(e){
+    showToast('Esse site não deixa puxar a foto assim. No Google, use botão direito > Copiar imagem e aperte Ctrl+V aqui.', 9000);
+    return false;
+  }
+}
+async function colarFotoProduto(){
+  try{
+    const itens = await navigator.clipboard.read();
+    for(const it of itens){
+      const tipo = it.types.find(t=>t.startsWith('image/'));
+      if(tipo){ await usarBlobFoto(await it.getType(tipo)); return; }
+    }
+    for(const it of itens){
+      if(it.types.includes('text/plain')){ const t = (await (await it.getType('text/plain')).text()).trim(); if(await usarLinkFoto(t)) return; }
+    }
+    showToast('Não achei foto copiada. No Google: botão direito na foto > Copiar imagem.', 7000);
+  }catch(e){
+    showToast('Aperte Ctrl+V aqui na tela do produto para colar a foto.', 6000);
+  }
+}
+document.addEventListener('paste', async (ev)=>{
+  if(!document.getElementById('prodFotoPreview') || !ev.clipboardData) return;
+  const arq = Array.from(ev.clipboardData.items||[]).find(i=>i.kind==='file' && i.type.startsWith('image/'));
+  if(arq){ ev.preventDefault(); await usarBlobFoto(arq.getAsFile()); return; }
+  const alvo = ev.target, emCampo = alvo && (alvo.tagName==='INPUT' || alvo.tagName==='TEXTAREA');
+  const html = ev.clipboardData.getData('text/html') || '';
+  const m = html.match(/<img[^>]+src="([^"]+)"/i);
+  if(m && !emCampo){ ev.preventDefault(); await usarLinkFoto(m[1].replace(/&amp;/g,'&')); }
+});
+document.addEventListener('dragover', (ev)=>{ if(document.getElementById('prodFotoPreview')) ev.preventDefault(); });
+document.addEventListener('drop', async (ev)=>{
+  if(!document.getElementById('prodFotoPreview')) return;
+  ev.preventDefault();
+  const dt = ev.dataTransfer; if(!dt) return;
+  const f = Array.from(dt.files||[]).find(x=>x.type.startsWith('image/'));
+  if(f){ await usarBlobFoto(f); return; }
+  const html = dt.getData('text/html') || '';
+  const m = html.match(/<img[^>]+src="([^"]+)"/i);
+  const link = m ? m[1].replace(/&amp;/g,'&') : (dt.getData('text/uri-list')||dt.getData('text/plain')||'').split('\n')[0].trim();
+  if(link) await usarLinkFoto(link);
+});
 function removerFotoProduto(){
   document.getElementById('mFotoBase64').value = '';
   document.getElementById('prodFotoPreview').innerHTML = '<span>Sem foto</span>';
@@ -5914,9 +6090,10 @@ async function saveProduct(id){
   const minStock = parseFloat(document.getElementById('mMin').value)||0;
   const photoBase64 = document.getElementById('mFotoBase64').value || null;
   if(!name || price<=0){ showToast('Informe ao menos o nome e o preço de venda.'); return; }
-  if(barcode && DB.products.some(p=>p.barcode===barcode && p.id!==id)){ showToast('Já existe um produto com esse código de barras.'); return; }
-  const nomeNorm = normalizarBusca(name);
-  const duplicado = DB.products.find(p=>normalizarBusca(p.name)===nomeNorm && p.id!==id);
+  const mesmoCodigo = barcode && chaveCodigo(barcode) ? DB.products.find(p=>p.id!==id && chaveCodigo(p.barcode)===chaveCodigo(barcode)) : null;
+  if(mesmoCodigo){ showToast('❌ Não é permitido cadastro duplicado. Esse código de barras já é do produto "'+mesmoCodigo.name+'". Abra esse produto para editar.', 9000); return; }
+  const nomeNorm = chaveNome(name);
+  const duplicado = DB.products.find(p=>chaveNome(p.name)===nomeNorm && p.id!==id);
   if(duplicado){
     showToast('❌ Não é permitido cadastro duplicado. Já existe um produto chamado "'+duplicado.name+'" (estoque atual: '+duplicado.stock+'). Se for o mesmo produto, cancele e use "Estoque → Entrada de Mercadoria" para somar a quantidade. Se for um produto diferente, mude o nome (ex: inclua marca, tamanho ou variação) antes de salvar.', 9000);
     return;
@@ -5986,8 +6163,8 @@ function onImportarProdutosSelected(input){
       const category = (item.category||item.categoria||'').toString().trim();
       const brand = (item.brand||item.marca||'').toString().trim();
       const saleType = (item.saleType==='peso' || (item.und||'').toString().toUpperCase()==='KG') ? 'peso' : 'unidade';
-      const existente = (barcode ? DB.products.find(p=>p.barcode===barcode) : null)
-        || DB.products.find(p=>normalizarBusca(p.name)===normalizarBusca(name));
+      const existente = (chaveCodigo(barcode) ? DB.products.find(p=>chaveCodigo(p.barcode)===chaveCodigo(barcode)) : null)
+        || DB.products.find(p=>chaveNome(p.name)===chaveNome(name));
       if(existente){
         existente.cost = cost || existente.cost;
         existente.price = price;
@@ -6905,7 +7082,7 @@ async function iniciarBackupAutomatico(){
 /* ================================================================
    ATUALIZAÇÕES — verifica no GitHub se existe versão mais nova
    ================================================================ */
-const APP_VERSAO = '2.5.0';
+const APP_VERSAO = '2.5.1';
 const URL_VERSAO = 'https://raw.githubusercontent.com/serfico21-arch/pdv/main/versao.json';
 const URL_REPO_OK = 'https://github.com/serfico21-arch/pdv/';
 let _upd = { checando:false, ultima:null, info:null, erro:null, avisou:false };

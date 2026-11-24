@@ -1,3 +1,8 @@
+Produtos repetidos: o sistema não deixa cadastrar o mesmo código de barras ou o mesmo nome duas vezes (mesmo com espaço, zero na frente ou acento diferente)
+Produtos repetidos já cadastrados: botão "Ver e juntar repetidos" em Cadastros > Produtos (soma o estoque, nada se perde)
+Fotos: botão "Achar foto sozinho" coloca a foto do produto pelo nome (ex.: Arroz Camil) e mostra outras para escolher com um toque
+Fotos: botão "Procurar no Google Imagens" abre a pesquisa do produto
+Fotos: copie a imagem no Google e aperte Ctrl+V no cadastro (ou arraste) — o tamanho é ajustado sozinho
 Fotos dos produtos: botão "Buscar foto na internet" acha a foto pelo código de barras ou pelo nome
 Fotos grandes do celular agora são diminuídas sozinhas (até 25MB)
 Removido o link "ambiente de teste" da tela (a página não existia)
