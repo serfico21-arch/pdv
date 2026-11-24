@@ -1,3 +1,4 @@
+Cadastro pelo código de barras: ao bipar, nome, marca, categoria e foto são preenchidos sozinhos (preço e estoque continuam com você)
 Aviso ao administrador explicando as novidades (fotos e produtos repetidos)
 Produtos repetidos: o sistema não deixa cadastrar o mesmo código de barras ou o mesmo nome duas vezes (mesmo com espaço, zero na frente ou acento diferente)
 Produtos repetidos já cadastrados: botão "Ver e juntar repetidos" em Cadastros > Produtos (soma o estoque, nada se perde)

@@ -3227,7 +3227,7 @@ function tryCadastroPassword(){
   if(found.papel==='admin') setTimeout(mostrarNovidadesAdm, 400);
 }
 /* ---- Aviso de novidades para o administrador (aparece uma vez a cada versão nova) ---- */
-const NOVIDADES_VERSAO = '2.5.2';
+const NOVIDADES_VERSAO = '2.5.3';
 function mostrarNovidadesAdm(forcar){
   if(!forcar && DB.settings.novidadesVistas === NOVIDADES_VERSAO) return;
   if(!forcar && document.querySelector('#modalRoot .modal-bg')) return; // não atrapalha outra janela aberta
@@ -3237,6 +3237,8 @@ function mostrarNovidadesAdm(forcar){
       <div class="modal wide">
         <h3>📢 Aviso ao administrador — novidades do gestor</h3>
         <div class="small-note">Esta mensagem aparece uma vez. Para ver de novo: botão ❓ Ajuda → 📢 Novidades.</div>
+        <h4 style="margin:14px 0 6px;">🏷️ Cadastro pelo código de barras</h4>
+        <div>Em <b>+ Novo Produto</b>, bipe o código de barras: <b>nome, marca, categoria e foto</b> entram sozinhos (quando o produto é conhecido). Você só confere e coloca o <b>preço</b> e o <b>estoque</b>.</div>
         <h4 style="margin:14px 0 6px;">📷 Fotos dos produtos ficaram fáceis</h4>
         <ol style="margin:0 0 0 18px; line-height:1.7;">
           <li>Em <b>Cadastros → Produtos</b>, clique em <b>Editar</b> no produto.</li>
@@ -5884,9 +5886,10 @@ function openProductModal(id, prefilledBarcode, prefilledName){
         <div class="field">
           <label>Código de barras</label>
           <div style="display:flex; gap:8px;">
-            <input id="mBarcode" value="${p?escapeHtml(p.barcode||''):escapeHtml(prefilledBarcode||'')}" placeholder="Bipe com o leitor ou digite" style="flex:1;">
+            <input id="mBarcode" data-pid="${p?p.id:''}" value="${p?escapeHtml(p.barcode||''):escapeHtml(prefilledBarcode||'')}" placeholder="Bipe com o leitor ou digite" style="flex:1;" onkeydown="if(event.key==='Enter'){event.preventDefault(); preencherPeloCodigo(true);}" onchange="preencherPeloCodigo(false)">
             <button type="button" class="btn btn-outline btn-sm" onclick="lerBarcodeCadastro()">📷</button>
           </div>
+          <div class="small-note" id="mCodigoStatus" style="margin-top:4px;">Ao bipar o código, nome, marca, categoria e foto são preenchidos sozinhos (quando o produto é conhecido).</div>
         </div>
         <div class="field">
           <label>Tipo de venda</label>
@@ -5909,6 +5912,7 @@ function openProductModal(id, prefilledBarcode, prefilledName){
         </div>
       </div>
     </div>`;
+  if(!p && prefilledBarcode) setTimeout(()=>preencherPeloCodigo(false), 50);
 }
 function onMudaTipoVendaProduto(){
   const isPeso = document.getElementById('mSaleType').value==='peso';
@@ -5925,13 +5929,75 @@ async function lerBarcodeCadastro(){
     const tryDetect = async ()=>{
       try{
         const codes = await detector.detect(video);
-        if(codes.length){ document.getElementById('mBarcode').value = codes[0].rawValue; stream.getTracks().forEach(t=>t.stop()); showToast('Código lido!'); return; }
+        if(codes.length){ document.getElementById('mBarcode').value = codes[0].rawValue; stream.getTracks().forEach(t=>t.stop()); showToast('Código lido!'); preencherPeloCodigo(true); return; }
       }catch(e){}
       stream.getVideoTracks()[0].readyState==='live' && requestAnimationFrame(tryDetect);
     };
     tryDetect();
     setTimeout(()=>{ if(stream.getVideoTracks()[0].readyState==='live') stream.getTracks().forEach(t=>t.stop()); }, 8000);
   }catch(e){ showToast('Não foi possível acessar a câmera.'); }
+}
+// ---------- Cadastro pelo código de barras: busca nome, marca, categoria e foto (grátis, Open Food Facts) ----------
+// Nunca mexe em preço, custo ou estoque, e só preenche o que estiver vazio.
+function categoriaPeloCodigo(prod){
+  const t = ((prod.categories_tags||[]).filter(c=>!/foods-and-beverages/.test(c)).join(' ')+' '+(prod.product_type||'')+' '+(prod.product_name_pt||prod.product_name||'')).toLowerCase();
+  const tem = re => re.test(t);
+  if(tem(/beauty|shampoo|condicionador|sabonete|soap|toothpaste|creme dental|desodorante|deodorant|hygien|higien|absorvente|fralda/)) return 'Higiene e Beleza';
+  if(tem(/clean|limpeza|detergent|deterg|desinfetante|amaciante|sabao em po|água sanitária|agua sanitaria/)) return 'Limpeza';
+  if(tem(/petfood|pet-food|pet food|racao|ração|dog|cat-food/)) return 'Pet';
+  if(tem(/beverage|bebida|drink|soda|refrigerante|juice|suco|water|agua|beer|cerveja|wine|vinho|coffee-drinks/)) return 'Bebidas';
+  if(tem(/dairies|dairy|milk|leite|cheese|queijo|yogurt|iogurte|butter|manteiga|cream/)) return 'Laticínios';
+  if(tem(/frozen|congelad|ice-cream|sorvete/)) return 'Congelados';
+  if(tem(/meat|carne|sausage|salsicha|linguica|ham|presunto|chicken|frango|mortadela/)) return 'Carnes e Frios';
+  if(tem(/bread|pao|pão|bakery|padaria|cake|bolo/)) return 'Padaria';
+  if(tem(/chocolate|sweet|doce|candies|candy|biscuit|biscoito|cookie|snack|confection|wafer/)) return 'Doces e Biscoitos';
+  if(tem(/fresh-fruits|fresh-vegetables|frutas frescas|verduras/)) return 'Hortifruti';
+  return 'Mercearia';
+}
+function nomePeloCodigo(prod){
+  let nome = String(prod.product_name_pt || prod.product_name || prod.generic_name_pt || '').trim().replace(/\s+/g,' ');
+  if(!nome) return '';
+  const q = String(prod.quantity||'').trim().replace(/\s+/g,'').replace(/^(\d+(?:[.,]\d+)?)(lt|l)$/i,'$1L');
+  if(q && !chaveNome(nome).replace(/ /g,'').includes(chaveNome(q).replace(/ /g,''))) nome += ' ' + q;
+  return nome.charAt(0).toUpperCase() + nome.slice(1);
+}
+async function preencherPeloCodigo(doLeitor){
+  const campo = document.getElementById('mBarcode'); if(!campo) return;
+  const st = document.getElementById('mCodigoStatus');
+  const aviso = (txt)=>{ if(st) st.innerHTML = txt; };
+  const codigo = (campo.value||'').replace(/\D/g,'');
+  if(codigo.length < 8){ if(doLeitor) aviso('Código curto demais para buscar os dados.'); return; }
+  const pid = campo.dataset.pid || '';
+  const outro = DB.products.find(p=>p.id!==pid && chaveCodigo(p.barcode)===chaveCodigo(codigo));
+  if(outro){ aviso(`❌ Esse código já é do produto <b>${escapeHtml(outro.name)}</b>. Não cadastre de novo.`); showToast('❌ Esse código já está cadastrado em "'+outro.name+'".', 7000); return; }
+  if(campo.dataset.buscado === codigo) return;
+  campo.dataset.buscado = codigo;
+  aviso('⏳ Buscando os dados do produto pelo código...');
+  try{
+    const r = await fetch('https://world.openfoodfacts.org/api/v3/product/'+codigo+'.json?product_type=all&fields=product_name_pt,product_name,generic_name_pt,brands,quantity,categories_tags,image_front_url,image_url,product_type');
+    const d = r.ok ? await r.json() : null;
+    const prod = d && d.product;
+    if(!prod || !(prod.product_name_pt||prod.product_name||prod.generic_name_pt)){
+      aviso('Não achei esse código na base gratuita. Digite o nome e depois use <b>🔎 Achar foto sozinho</b>.');
+      return;
+    }
+    const preenchidos = [];
+    const pNome = document.getElementById('mNome'), pMarca = document.getElementById('mMarca'), pCat = document.getElementById('mCat');
+    if(pNome && !pNome.value.trim()){ const n = nomePeloCodigo(prod); if(n){ pNome.value = n; preenchidos.push('nome'); } }
+    if(pMarca && !pMarca.value.trim() && prod.brands){ pMarca.value = String(prod.brands).split(',')[0].trim(); preenchidos.push('marca'); }
+    if(pCat && !pCat.value.trim()){ pCat.value = categoriaPeloCodigo(prod); preenchidos.push('categoria'); }
+    const foto = prod.image_front_url || prod.image_url;
+    if(foto && !document.getElementById('mFotoBase64').value){
+      try{ await colocarFotoDoLink(foto); preenchidos.push('foto'); }catch(e){}
+    }
+    aviso(preenchidos.length
+      ? '✅ Preenchi sozinho: <b>'+preenchidos.join(', ')+'</b>. Confira e coloque o <b>preço</b> e o <b>estoque</b>.'
+      : '✅ Produto encontrado. Os campos já estavam preenchidos, não mudei nada.');
+    const preco = document.getElementById('mPreco'); if(preco && !preco.value && preenchidos.length) preco.focus();
+  }catch(e){
+    campo.dataset.buscado = '';
+    aviso('Sem internet agora. Preencha os dados à mão ou bipe de novo depois.');
+  }
 }
 function mostrarFotoProduto(dataUrl){
   document.getElementById('mFotoBase64').value = dataUrl;
@@ -7119,7 +7185,7 @@ async function iniciarBackupAutomatico(){
 /* ================================================================
    ATUALIZAÇÕES — verifica no GitHub se existe versão mais nova
    ================================================================ */
-const APP_VERSAO = '2.5.2';
+const APP_VERSAO = '2.5.3';
 const URL_VERSAO = 'https://raw.githubusercontent.com/serfico21-arch/pdv/main/versao.json';
 const URL_REPO_OK = 'https://github.com/serfico21-arch/pdv/';
 let _upd = { checando:false, ultima:null, info:null, erro:null, avisou:false };
