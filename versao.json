@@ -1,10 +1,12 @@
 {
-  "versao": "2.4.2",
-  "data": "2026-10-20",
+  "versao": "2.5.0",
+  "data": "2026-11-24",
   "instalador": "https://github.com/serfico21-arch/pdv/raw/main/FCostaGestor-Instalador.exe",
   "html": "https://github.com/serfico21-arch/pdv/raw/main/fcosta-gestor.html",
-  "sha256": "7904311b7e796e50e27d72cff503fda1387c34d7b7bf965ad87f1ec43f4051f7",
+  "sha256": "afcd3acc5ce0e13526be4bedb42c15696031cc4b89e6f972f54a4072467d3c41",
   "notas": [
+    "Fotos dos produtos: botão \"Buscar foto na internet\" acha a foto pelo código de barras ou pelo nome",
+    "Fotos grandes do celular agora são diminuídas sozinhas (até 25MB)",
     "Removido o link \"ambiente de teste\" da tela (a página não existia)",
     "Recuperação de acesso: código do suporte redefine os logins sem apagar os dados",
     "Ativação por licença: cada instalação precisa de uma chave (teste grátis de 15 dias)",
