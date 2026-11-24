@@ -3095,6 +3095,7 @@ function tryAdminSenhaRapida(){
   closeModal();
   showToast('🔑 Acesso administrativo liberado');
   switchTab('cadastros');
+  setTimeout(mostrarNovidadesAdm, 400);
 }
 function mostrarDicaSenhaAdmin(){
   const admins = (DB.settings.usuarios||[]).filter(u=>u.papel==='admin');
@@ -3223,6 +3224,42 @@ function tryCadastroPassword(){
   closeModal();
   currentTab = tabAposLogin || 'cadastros'; tabAposLogin=null;
   renderNav(); renderContent();
+  if(found.papel==='admin') setTimeout(mostrarNovidadesAdm, 400);
+}
+/* ---- Aviso de novidades para o administrador (aparece uma vez a cada versão nova) ---- */
+const NOVIDADES_VERSAO = '2.5.2';
+function mostrarNovidadesAdm(forcar){
+  if(!forcar && DB.settings.novidadesVistas === NOVIDADES_VERSAO) return;
+  if(!forcar && document.querySelector('#modalRoot .modal-bg')) return; // não atrapalha outra janela aberta
+  const rep = gruposDuplicados().length;
+  document.getElementById('modalRoot').innerHTML = `
+    <div class="modal-bg">
+      <div class="modal wide">
+        <h3>📢 Aviso ao administrador — novidades do gestor</h3>
+        <div class="small-note">Esta mensagem aparece uma vez. Para ver de novo: botão ❓ Ajuda → 📢 Novidades.</div>
+        <h4 style="margin:14px 0 6px;">📷 Fotos dos produtos ficaram fáceis</h4>
+        <ol style="margin:0 0 0 18px; line-height:1.7;">
+          <li>Em <b>Cadastros → Produtos</b>, clique em <b>Editar</b> no produto.</li>
+          <li>Clique em <b>🔎 Achar foto sozinho</b>. A foto entra já no tamanho certo (pelo código de barras ou pelo nome, ex.: "Arroz Camil 5kg").</li>
+          <li>Se não for a foto certa, toque em outra que aparece embaixo.</li>
+          <li>Clique em <b>Salvar</b>. A foto vai junto no backup e aparece na loja online.</li>
+        </ol>
+        <div class="small-note" style="margin-top:6px;">Plano B: <b>🖼️ Procurar no Google Imagens</b> → botão direito na foto → <b>Copiar imagem</b> → volte e aperte <b>Ctrl+V</b>.</div>
+        <h4 style="margin:16px 0 6px;">🚫 Produto repetido não entra mais</h4>
+        <div>O sistema não deixa cadastrar duas vezes o mesmo código de barras ou o mesmo nome (mesmo com espaço, zero na frente, acento ou "5 kg"/"5kg").</div>
+        ${rep ? `<div style="margin-top:10px; background:#fff4d6; border:1px solid #e8c766; padding:10px 12px; border-radius:10px;">⚠️ Achei <b>${rep}</b> produto(s) repetido(s) no seu cadastro. Clique em <b>Ver repetidos agora</b>, marque qual cadastro fica e clique em Juntar. O estoque é <b>somado</b>, nada se perde.</div>` : '<div style="margin-top:8px;">✅ Seu cadastro não tem produtos repetidos.</div>'}
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">
+          ${rep ? '<button class="btn btn-outline" onclick="fecharNovidadesAdm(true)">🧹 Ver repetidos agora</button>' : ''}
+          <button class="btn btn-primary" onclick="fecharNovidadesAdm(false)">Entendi</button>
+        </div>
+      </div>
+    </div>`;
+}
+async function fecharNovidadesAdm(abrirRepetidos){
+  DB.settings.novidadesVistas = NOVIDADES_VERSAO;
+  try{ await saveKey(KEYS.settings, DB.settings); }catch(e){}
+  closeModal();
+  if(abrirRepetidos){ currentTab='cadastros'; renderNav(); renderContent(); abrirDuplicados(); }
 }
 function lockCadastros(){ cadastrosUnlocked=false; currentTab='pdv'; renderNav(); renderContent(); showToast('Área protegida bloqueada.'); }
 
@@ -7082,7 +7119,7 @@ async function iniciarBackupAutomatico(){
 /* ================================================================
    ATUALIZAÇÕES — verifica no GitHub se existe versão mais nova
    ================================================================ */
-const APP_VERSAO = '2.5.1';
+const APP_VERSAO = '2.5.2';
 const URL_VERSAO = 'https://raw.githubusercontent.com/serfico21-arch/pdv/main/versao.json';
 const URL_REPO_OK = 'https://github.com/serfico21-arch/pdv/';
 let _upd = { checando:false, ultima:null, info:null, erro:null, avisou:false };
@@ -7446,7 +7483,8 @@ function abrirManualAjuda(){
       <div class="modal wide help-modal">
         <div class="flexbet" style="margin-bottom:6px;">
           <h3>❓ Manual — Como funciona o sistema</h3>
-          <button class="btn btn-ghost btn-sm" onclick="closeModal()">Fechar ✕</button>
+          <div style="display:flex; gap:8px;"><button class="btn btn-outline btn-sm" onclick="mostrarNovidadesAdm(true)">📢 Novidades</button>
+          <button class="btn btn-ghost btn-sm" onclick="closeModal()">Fechar ✕</button></div>
         </div>
         <p class="muted" style="margin-bottom:16px;">Toque em cada tópico para abrir a explicação. Pode deixar vários abertos ao mesmo tempo.</p>
 

@@ -1,3 +1,4 @@
+Aviso ao administrador explicando as novidades (fotos e produtos repetidos)
 Produtos repetidos: o sistema não deixa cadastrar o mesmo código de barras ou o mesmo nome duas vezes (mesmo com espaço, zero na frente ou acento diferente)
 Produtos repetidos já cadastrados: botão "Ver e juntar repetidos" em Cadastros > Produtos (soma o estoque, nada se perde)
 Fotos: botão "Achar foto sozinho" coloca a foto do produto pelo nome (ex.: Arroz Camil) e mostra outras para escolher com um toque
