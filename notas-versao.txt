@@ -1,3 +1,4 @@
+Fotos: botão "Achar foto sozinho" coloca a foto do produto pelo nome (ex.: Arroz Camil) e mostra outras para escolher com um toque
 Fotos: botão "Procurar no Google Imagens" abre a pesquisa do produto
 Fotos: copie a imagem no Google e aperte Ctrl+V no cadastro (ou arraste) — o tamanho é ajustado sozinho
 Fotos dos produtos: botão "Buscar foto na internet" acha a foto pelo código de barras ou pelo nome
