@@ -2534,6 +2534,7 @@ tr:last-child td{border-bottom:none;}
 .nf-celular{display:flex; gap:14px; flex-wrap:wrap; align-items:center; background:#eef0fb; border-radius:10px; padding:12px 14px; margin:8px 0 14px; font-size:14px; line-height:1.5;}
 .nf-celular-on{background:#e3efe1;}
 .nf-celular-qr{background:#fff; border-radius:8px; padding:4px; line-height:0;}
+.nf-celular-grande{background:#fff6d6; border:2px solid #f5c400;}
 .nf-passos{background:#fff6e5; border-radius:10px; padding:10px 12px; margin-bottom:10px; font-size:14px; line-height:1.5;}
 .nf-botoes{display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;}
 .nf-botoes .btn{cursor:pointer;}
@@ -4459,66 +4460,57 @@ function nfLerTextoCupom(){
     nfPrepararConferencia(nota);
   }catch(e){ showToast('❌ '+e.message, 9000); }
 }
-/* ---- Leitor no celular: o celular lê o código e manda; o gestor pega sozinho ----
-   Usa o mesmo banco da loja (Supabase). Só funciona com internet e com o código da loja. */
-const LEITOR_SB_URL = 'https://avvhnajfczdedlydkcrb.supabase.co';
+/* ---- Leitor no celular ----
+   O gestor cria um código secreto de pareamento e mostra num QR. O celular aponta a câmera
+   para o QR uma vez e fica ligado a este gestor. Depois, tudo que o celular lê chega aqui sozinho.
+   (A SEFAZ-SP recusa consultas vindas de servidor: os itens do cupom ainda são copiados e colados aqui.) */
+const LEITOR_FN = 'https://avvhnajfczdedlydkcrb.supabase.co/functions/v1/leitor-nota';
 const LEITOR_SB_KEY = 'sb_publishable_y3y3sLLFrm5HrXDa2ttGTA_dl8vouP7';
-const LEITOR_LOJA = 'pinheiro-costa';
 const LEITOR_LINK = 'https://serfico21-arch.github.io/Pessoal/mercado/leitor/';
-let leitorFila = [], leitorEstado = '', leitorBuscando = false, leitorAvisouOcupado = false;
+let leitorFila = [], leitorEstado = '', leitorBuscando = false, leitorAvisouOcupado = false, leitorMostrarQr = false;
+function leitorPar(){
+  if(!DB.settings.leitorPar){
+    const a = new Uint8Array(24); crypto.getRandomValues(a);
+    const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    DB.settings.leitorPar = Array.from(a, x=>abc[x % abc.length]).join('') + Date.now().toString(36);
+    saveKey(KEYS.settings, DB.settings);
+  }
+  return DB.settings.leitorPar;
+}
+function leitorLinkPar(){ return LEITOR_LINK + '#p=' + leitorPar(); }
 function renderLeitorCelular(){
-  const cod = DB.settings.leitorCodigo || '';
-  if(!cod) return `
-    <div class="nf-celular">
-      <div style="width:100%;"><strong>📱 Leitor no celular</strong> — leia o QR do cupom ou o código do DANFE com o celular e ele aparece aqui sozinho.</div>
-      <div class="nf-botoes" style="align-items:center;">
-        <input id="leitorCodigoInput" placeholder="Código da loja (o mesmo da Central)" style="max-width:300px;">
-        <button class="btn btn-primary btn-sm" onclick="leitorLigar()">Ligar celular</button>
+  const ligado = !!DB.settings.leitorPareado;
+  if(!ligado || leitorMostrarQr) return `
+    <div class="nf-celular nf-celular-grande">
+      <div class="nf-celular-qr">${gerarQRCodeSVG(leitorLinkPar(), 170)}</div>
+      <div style="flex:1;min-width:230px;">
+        <div style="font-size:19px;font-weight:800;margin-bottom:6px;">📱 Ligar o celular (só uma vez)</div>
+        <div style="font-size:15px;line-height:1.6;">1. Abra a <strong>câmera do celular</strong>.<br>2. Aponte para este <strong>quadrado</strong>.<br>3. Toque no link que aparecer.</div>
+        <div class="small-note">Pronto: tudo que você ler no celular (cupom ou nota) aparece aqui sozinho.${leitorEstado?'<br>'+escapeHtml(leitorEstado):''}</div>
+        ${ligado?`<button class="btn btn-outline btn-sm" style="margin-top:6px;" onclick="leitorMostrarQr=false;renderContent()">Fechar</button>`:''}
       </div>
     </div>`;
   return `
     <div class="nf-celular nf-celular-on">
-      <div style="flex:1;min-width:220px;">
-        <strong>📱 Leitor no celular ligado</strong><br>
-        <span class="muted">${leitorEstado ? escapeHtml(leitorEstado) : 'Esperando o celular mandar uma nota...'}</span><br>
-        <span class="small-note">No celular, abra o link (ou aponte a câmera para o quadrinho ao lado):<br><span class="mono">${escapeHtml(LEITOR_LINK)}</span></span><br>
-        <button class="btn btn-outline btn-sm" style="margin-top:6px;" onclick="leitorDesligar()">Desligar</button>
-      </div>
-      <div class="nf-celular-qr">${gerarQRCodeSVG(LEITOR_LINK, 120)}</div>
+      <div style="flex:1;"><strong>📱 Celular ligado ✅</strong> — leia o cupom ou a nota no celular e ela aparece aqui sozinha.
+      ${leitorEstado && leitorEstado.startsWith('⚠️') ? '<br><span class="muted">'+escapeHtml(leitorEstado)+'</span>' : ''}</div>
+      <button class="btn btn-outline btn-sm" onclick="leitorMostrarQr=true;renderContent()">Ligar outro celular</button>
     </div>`;
 }
-async function leitorLigar(){
-  const el = document.getElementById('leitorCodigoInput');
-  const v = (el ? el.value : '').trim().toUpperCase();
-  if(v.length<6){ showToast('Digite o código da loja (o mesmo que você usa na Central).'); return; }
-  DB.settings.leitorCodigo = v; leitorEstado = 'Ligando...';
-  await saveKey(KEYS.settings, DB.settings);
-  renderContent(); leitorBuscar(true);
-}
-async function leitorDesligar(){
-  if(!confirm('Desligar o leitor do celular neste computador?')) return;
-  DB.settings.leitorCodigo = ''; leitorEstado = ''; await saveKey(KEYS.settings, DB.settings); renderContent();
-}
 function leitorNaTelaDeEntrada(){ return currentTab==='estoque' && stockSubTab==='entrada'; }
-async function leitorBuscar(forcar){
-  const cod = DB.settings && DB.settings.leitorCodigo;
-  if(!cod || leitorBuscando) return;
-  if(!forcar && navigator.onLine===false) return;
+async function leitorBuscar(){
+  if(leitorBuscando || !DB.settings || navigator.onLine===false) return;
   leitorBuscando = true;
   let novoEstado = leitorEstado;
   try{
-    const r = await fetch(LEITOR_SB_URL+'/rest/v1/rpc/mercado_pegar_leituras', {method:'POST',
-      headers:{apikey:LEITOR_SB_KEY, Authorization:'Bearer '+LEITOR_SB_KEY, 'Content-Type':'application/json'},
-      body: JSON.stringify({p_slug:LEITOR_LOJA, p_codigo:cod})});
-    if(r.status===404) novoEstado = '⚠️ O leitor ainda não foi ligado no Supabase (falta rodar o comando).';
-    else if(!r.ok) novoEstado = '⚠️ Não consegui falar com o celular agora. Tento de novo sozinho.';
+    const r = await fetch(LEITOR_FN, {method:'POST', headers:{apikey:LEITOR_SB_KEY, 'Content-Type':'application/json'},
+      body: JSON.stringify({acao:'pegar', par:leitorPar()})});
+    const j = r.ok ? await r.json() : null;
+    if(!j || !j.ok) novoEstado = '⚠️ Não consegui falar com o celular agora. Tento de novo sozinho.';
     else{
-      const lista = await r.json();
-      if(lista===null) novoEstado = '⚠️ Código da loja errado. Aperte "Desligar" e ligue de novo com o código certo.';
-      else{
-        novoEstado = '✅ Ligado. Esperando o celular mandar uma nota...';
-        (lista||[]).forEach(x=>{ if(x && x.conteudo) leitorFila.push(String(x.conteudo)); });
-      }
+      novoEstado = '';
+      (j.lista||[]).forEach(x=>{ if(x && x.conteudo) leitorFila.push(x); });
+      if(j.lista && j.lista.length && !DB.settings.leitorPareado){ DB.settings.leitorPareado = true; leitorMostrarQr = false; saveKey(KEYS.settings, DB.settings); }
     }
   }catch(e){ novoEstado = '⚠️ Sem internet. Tento de novo sozinho.'; }
   leitorBuscando = false;
@@ -4535,16 +4527,30 @@ async function leitorBuscar(forcar){
   if(!leitorFila.length) leitorAvisouOcupado = false;
   if(mudou && !nfConferencia && leitorNaTelaDeEntrada() && !document.querySelector('.modal-bg')){
     const ativo = document.activeElement; const focoId = ativo && ativo.id;
-    if(!focoId || (focoId!=='nfTextoCupom' && focoId!=='movQtd' && focoId!=='movBusca' && focoId!=='nfChaveInput' && focoId!=='leitorCodigoInput')) renderContent();
+    if(!focoId || (focoId!=='nfTextoCupom' && focoId!=='movQtd' && focoId!=='movBusca' && focoId!=='nfChaveInput')) renderContent();
   }
 }
+function nfNotaDeDados(d){
+  return { chave:d.chave, numero:String(d.numero||''), serie:String(d.serie||''), dataEmissao:d.dataEmissao||'', natOp:'Cupom fiscal (NFC-e)', tpNF:'1', cupom:true,
+    fornecedor:{ cnpj:d.fornecedor&&d.fornecedor.cnpj||'', nome:(d.fornecedor&&d.fornecedor.nome)||'Fornecedor do cupom', fantasia:'', ie:'', endereco:'', telefone:'' },
+    destinatario:{cnpj:'',nome:''},
+    totais:{ vProd:+(d.totais&&d.totais.vProd)||0, vNF:+(d.totais&&d.totais.vNF)||0, vICMS:0, vST:0, vIPI:0, vPIS:0, vCOFINS:0, vFrete:0, vDesc:0 },
+    itens:(d.itens||[]).map((i,k)=>({ nItem:String(k+1), cProd:String(i.cProd||''), ean:/^\d{8,14}$/.test(String(i.cProd||''))?String(i.cProd):'', eanTrib:'',
+      xProd:String(i.xProd||''), ncm:'', cest:'', cfop:'', uCom:String(i.uCom||'UN'), qCom:+i.qCom||0, vUnCom:+i.vUnCom||0, vProd:+i.vProd||0,
+      uTrib:String(i.uCom||'UN'), qTrib:+i.qCom||0, vDesc:0, vFrete:0, vOutro:0, icms:{cst:'',vBC:0,pICMS:0,vICMS:0,vICMSST:0}, vIPI:0, vPIS:0, vCOFINS:0, embalagem:1 })) };
+}
 function leitorProcessarFila(){
-  const conteudo = leitorFila.shift(); if(!conteudo) return;
-  if(document.querySelector('.modal-bg')) { leitorFila.unshift(conteudo); return; }
+  const x = leitorFila.shift(); if(!x) return;
+  if(document.querySelector('.modal-bg')) { leitorFila.unshift(x); return; }
   leitorAvisouOcupado = false;
   nfChaveLida = null; nfTextoCupom = '';
+  const conteudo = String(x.conteudo||'');
   showToast('📱 Chegou do celular!', 4000);
-  if(/https?:|\?p=|www\./i.test(conteudo)) nfLerQrCupom(conteudo);
+  if(x.dados && x.dados.itens && x.dados.itens.length){
+    const r = nfLerChave(x.dados.chave || x.chave || '');
+    if(!r.erro){ r.url = /^https?:/i.test(conteudo) ? conteudo : ''; nfChaveLida = r; }
+    nfPrepararConferencia(nfNotaDeDados(Object.assign({chave: x.chave}, x.dados)));
+  }else if(/https?:|\?p=|www\./i.test(conteudo)) nfLerQrCupom(conteudo);
   else{
     const r = nfLerChave(conteudo);
     if(r.erro){ showToast('❌ O celular mandou um código que não é de nota.'); renderContent(); return; }
@@ -4554,7 +4560,7 @@ function leitorProcessarFila(){
   }
   if(leitorFila.length) setTimeout(()=>showToast('📱 Há mais '+leitorFila.length+' nota(s) do celular esperando. Termine esta primeiro.', 6000), 4500);
 }
-setInterval(()=>leitorBuscar(false), 4000);
+setInterval(()=>{ if(!document.hidden) leitorBuscar(); }, 5000);
 async function nfAbrirSiteXml(){
   if(!nfChaveLida) return;
   try{ await navigator.clipboard.writeText(nfChaveLida.chave); showToast('Chave copiada. No site, cole com Ctrl+V. Baixe o XML e depois escolha o arquivo aqui.', 8000); }
@@ -7811,7 +7817,7 @@ async function iniciarBackupAutomatico(){
 /* ================================================================
    ATUALIZAÇÕES — verifica no GitHub se existe versão mais nova
    ================================================================ */
-const APP_VERSAO = '2.6.0';
+const APP_VERSAO = '2.6.1';
 const URL_VERSAO = 'https://raw.githubusercontent.com/serfico21-arch/pdv/main/versao.json';
 const URL_REPO_OK = 'https://github.com/serfico21-arch/pdv/';
 let _upd = { checando:false, ultima:null, info:null, erro:null, avisou:false };

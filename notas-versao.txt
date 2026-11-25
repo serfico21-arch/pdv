@@ -1,3 +1,4 @@
+Celular mais fácil: aponte a câmera do celular para o quadrado do gestor uma vez e pronto, sem digitar código
 Entrada pela nota fiscal: bipe o código de barras do DANFE, escolha o XML e os itens da nota aparecem sozinhos para conferir e confirmar
 Leitor no celular: leia o QR do cupom ou o código do DANFE com o celular e o gestor abre sozinho a Entrada de Mercadoria com a nota
 Ler a nota ou o cupom direto do PDF do scanner ou de uma foto (acha o QR Code ou a chave sozinho)
