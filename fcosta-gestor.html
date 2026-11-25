@@ -2531,6 +2531,7 @@ tr:last-child td{border-bottom:none;}
 .nf-card h2{margin-bottom:6px;}
 .nf-chave-ok{background:#e3efe1; border-radius:10px; padding:12px 14px; margin:6px 0 12px; line-height:1.6;}
 .nf-alerta{background:#fbe6e1; color:var(--vermelho); border-radius:10px; padding:10px 12px; margin:8px 0; font-weight:600;}
+.nf-passos{background:#fff6e5; border-radius:10px; padding:10px 12px; margin-bottom:10px; font-size:14px; line-height:1.5;}
 .nf-botoes{display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;}
 .nf-botoes .btn{cursor:pointer;}
 .nf-soltar{border:2px dashed var(--linha); border-radius:10px; padding:14px; text-align:center; color:#8b8270; margin-top:12px; font-size:13px;}
@@ -4222,14 +4223,15 @@ function renderEntradaNota(){
         <div class="mono muted" style="font-size:12px;">${escapeHtml(nfFormatarChave(k.chave))}</div>
         ${ja?`<div class="nf-alerta">⚠️ Esta nota JÁ foi lançada em ${new Date(ja.importadaEm).toLocaleString('pt-BR')} (${ja.itens} itens). Não lance de novo, senão o estoque fica dobrado.</div>`:''}
       </div>`:''}
+    ${k?`<div class="nf-passos"><strong>Próximo passo:</strong> 1) aperte "Buscar a nota no Meu Danfe" · 2) lá, cole a chave (Ctrl+V) e baixe o XML · 3) volte aqui e aperte "Escolher o XML da nota" (fica na pasta Downloads).</div>`:''}
     <div class="nf-botoes">
-      <label class="btn btn-primary">📂 Escolher o XML da nota
+      ${k?`<button class="btn btn-primary" onclick="nfAbrirSiteXml()">🌐 1. Buscar a nota no Meu Danfe (grátis)</button>`:''}
+      <label class="btn ${k?'btn-outline':'btn-primary'}">📂 ${k?'3. ':''}Escolher o XML da nota
         <input type="file" accept=".xml,text/xml,application/xml" style="display:none" onchange="nfArquivoEscolhido(this)">
       </label>
-      ${k?`<button class="btn btn-outline" onclick="nfAbrirSiteXml()">🌐 Copiar a chave e tentar baixar o XML grátis</button>`:''}
     </div>
     <div id="nfSoltarAqui" class="nf-soltar" ondragover="event.preventDefault();this.classList.add('on')" ondragleave="this.classList.remove('on')" ondrop="nfSoltarArquivo(event)">ou arraste o arquivo XML para cá</div>
-    <div class="small-note">💡 Onde achar o XML: o fornecedor costuma mandar por e-mail junto com a nota. O botão "tentar baixar grátis" copia a chave e abre o site Meu Danfe (cole a chave lá; nem toda nota aparece). Baixar direto da SEFAZ, sem ninguém mandar, só é possível com o certificado digital A1 do mercado.</div>
+    <div class="small-note">💡 Se o Meu Danfe não tiver a nota: peça o XML ao fornecedor (por lei ele tem que mandar o XML para quem comprou; peça para enviar sempre para o seu e-mail). Enquanto isso, você pode dar entrada item por item no quadro de baixo.</div>
   </div>`;
 }
 function nfNomeFornecedorPorCnpj(cnpj){ const f = DB.suppliers.find(s=>s.cnpj && s.cnpj===cnpj); return f ? f.name : ''; }
