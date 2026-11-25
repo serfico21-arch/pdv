@@ -2535,6 +2535,9 @@ tr:last-child td{border-bottom:none;}
 .nf-celular-on{background:#e3efe1;}
 .nf-celular-qr{background:#fff; border-radius:8px; padding:4px; line-height:0;}
 .nf-celular-grande{background:#fff6d6; border:2px solid #f5c400;}
+.mov-un{display:flex;gap:8px;flex-wrap:wrap}
+.mov-un button{flex:1;min-width:140px;padding:10px;border-radius:10px;border:2px solid #cfd0e0;background:#fff;font-weight:700;cursor:pointer;font-size:15px}
+.mov-un button.on{border-color:#f5c400;background:#fff6d6}
 .nf-passos{background:#fff6e5; border-radius:10px; padding:10px 12px; margin-bottom:10px; font-size:14px; line-height:1.5;}
 .nf-botoes{display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;}
 .nf-botoes .btn{cursor:pointer;}
@@ -3010,7 +3013,7 @@ const TABS = [
   {id:'cadastros', label:'🔐 Cadastros'},
 ];
 function getLowStockProducts(){
-  return DB.products.filter(p=>p.stock<=(p.minStock||0));
+  return DB.products.filter(p=>!p.semEstoque && p.stock<=(p.minStock||0));
 }
 function renderLowStockBanner(){
   const low = getLowStockProducts();
@@ -3400,7 +3403,7 @@ function renderVendaScreen(){
         </div>
         <div id="scanFeedback" class="scan-feedback"></div>
         <div class="venda-form-grid" style="margin-top:14px;">
-          <div class="field"><label>Quantidade</label><input type="number" id="inputQtd" value="1" step="1" min="0.001" oninput="atualizarSubtotalForm()"></div>
+          <div class="field"><label>Quantidade</label><input type="number" id="inputQtd" value="1" step="1" min="0.001" oninput="atualizarSubtotalForm()"><div id="qtdPesoDica" class="small-note" style="margin-top:2px;font-weight:700;"></div></div>
           <div class="field"><label>Preço mercadoria</label><input type="number" id="inputPrecoUnit" step="0.01" placeholder="0,00" oninput="atualizarSubtotalForm()"></div>
           <div class="field"><label>Subtotal</label><div class="subtotal-form-box" id="subtotalFormVal">${brl(0)}</div></div>
         </div>
@@ -3460,7 +3463,7 @@ function onProdutoDigitado(){
   const fb = document.getElementById('scanFeedback');
   if(p){
     selectedProductId = p.id;
-    document.getElementById('inputPrecoUnit').value = p.price;
+    document.getElementById('inputPrecoUnit').value = precoKg(p);
     if(p.saleType==='peso'){ qtdInput.step='0.001'; qtdInput.min='0.001'; }
     else{ qtdInput.step='1'; qtdInput.min='1'; }
     if(fotoBox) fotoBox.innerHTML = p.photoBase64 ? `<img src="${p.photoBase64}">` : '<span style="font-size:20px;">📦</span>';
@@ -3490,8 +3493,17 @@ function onProdutoDigitado(){
   }
   atualizarSubtotalForm();
 }
+// Produto por peso: 0,250 = 250 g. Se digitar 50 ou mais, o gestor entende como gramas (250 -> 0,250 kg).
+// Produto por peso com preço por 100 g (frios): por dentro o gestor conta por kg (preço x 10)
+function fatorKg(p){ return (p && p.saleType==='peso' && p.preco100g) ? 10 : 1; }
+function precoKg(p){ return +((Number(p.price)||0) * fatorKg(p)).toFixed(2); }
+function precoTxt(p){ return p.saleType==='peso' ? brl(p.price)+(p.preco100g?' /100 g':'/kg') : brl(p.price); }
+function qtdVendaPeso(p, q){ return (p && p.saleType==='peso' && q>=50) ? +(q/1000).toFixed(3) : q; }
 function atualizarSubtotalForm(){
-  const qtd = parseFloat(document.getElementById('inputQtd').value)||0;
+  const pSel = selectedProductId ? DB.products.find(x=>x.id===selectedProductId) : null;
+  const qtd = qtdVendaPeso(pSel, parseFloat(document.getElementById('inputQtd').value)||0);
+  const dica = document.getElementById('qtdPesoDica');
+  if(dica) dica.textContent = pSel && pSel.saleType==='peso' ? (qtd>0 ? '= '+qtd.toLocaleString('pt-BR',{minimumFractionDigits:3})+' kg ('+Math.round(qtd*1000)+' g)' : 'kg ou gramas')+(pSel.preco100g?' · '+brl(pSel.price)+' por 100 g = '+brl(precoKg(pSel))+'/kg':'') : '';
   const preco = parseFloat(document.getElementById('inputPrecoUnit').value)||0;
   document.getElementById('subtotalFormVal').textContent = brl(qtd*preco);
 }
@@ -3500,15 +3512,16 @@ function adicionarItemVenda(){
   let p = selectedProductId ? DB.products.find(x=>x.id===selectedProductId) : null;
   if(!p) p = buscarProdutoPorTexto(nomeDigitado);
   if(!p){ showToast('Produto não encontrado. Confira o nome ou o código de barras.'); return; }
-  const qty = parseFloat(document.getElementById('inputQtd').value);
-  const price = parseFloat(document.getElementById('inputPrecoUnit').value) || p.price;
+  const qty = qtdVendaPeso(p, parseFloat(document.getElementById('inputQtd').value));
+  const price = parseFloat(document.getElementById('inputPrecoUnit').value) || precoKg(p);
   if(!qty || qty<=0){ showToast('Informe uma quantidade válida.'); return; }
   if(!price || price<=0){ showToast('Informe um preço válido.'); return; }
   const outrasQtd = cart.filter(l=>l.productId===p.id).reduce((s,l)=>s+l.qty,0);
-  if(outrasQtd+qty > p.stock){ showToast('Estoque insuficiente para '+p.name+' (disponível: '+p.stock+')'); return; }
+  if(p.saleType!=='peso' && !Number.isInteger(qty)){ showToast('"'+p.name+'" é vendido por unidade: digite um número inteiro (1, 2, 3...).', 6000); return; }
+  if(!p.semEstoque && outrasQtd+qty > p.stock){ showToast('Estoque insuficiente para '+p.name+' (disponível: '+p.stock+')'); return; }
   const existing = cart.find(l=>l.productId===p.id && l.price===price);
   if(existing) existing.qty += qty;
-  else cart.push({lineId:uid(), productId:p.id, name:p.name, price, cost:p.cost||0, qty, saleType:p.saleType||'unidade'});
+  else cart.push({lineId:uid(), productId:p.id, name:p.name, price, cost:+((p.cost||0)*fatorKg(p)).toFixed(4), qty, saleType:p.saleType||'unidade'});
   limparFormularioVenda();
   refreshCartUI();
 }
@@ -3520,6 +3533,7 @@ function limparFormularioVenda(){
   const subEl = document.getElementById('subtotalFormVal');
   const fotoBox = document.getElementById('vendaFotoPreview');
   const fb = document.getElementById('scanFeedback');
+  const dicaPeso = document.getElementById('qtdPesoDica'); if(dicaPeso) dicaPeso.textContent = '';
   if(prodEl) prodEl.value='';
   if(qtdEl){ qtdEl.value=1; qtdEl.step='1'; qtdEl.min='1'; }
   if(precoEl) precoEl.value='';
@@ -3685,7 +3699,7 @@ function ajustarQtdItem(lineId, delta){
   if(novaQtd<=0){ cart = cart.filter(l=>l.lineId!==lineId); refreshCartUI(); return; }
   const produto = DB.products.find(p=>p.id===item.productId);
   const outrasQtd = cart.filter(l=>l.productId===item.productId && l.lineId!==lineId).reduce((s,l)=>s+l.qty,0);
-  if(produto && (outrasQtd+novaQtd) > produto.stock){ showToast('Estoque insuficiente para '+item.name+' (disponível: '+produto.stock+')'); return; }
+  if(produto && !produto.semEstoque && (outrasQtd+novaQtd) > produto.stock){ showToast('Estoque insuficiente para '+item.name+' (disponível: '+produto.stock+')'); return; }
   item.qty = novaQtd;
   refreshCartUI();
 }
@@ -3799,16 +3813,16 @@ async function finalizarVenda(){
   cart.forEach(i=>{ somaPorProduto[i.productId] = (somaPorProduto[i.productId]||0) + i.qty; });
   for(const productId in somaPorProduto){
     const p = DB.products.find(x=>x.id===productId);
-    if(!p || p.stock < somaPorProduto[productId]){ showToast('Estoque insuficiente para '+(p?p.name:'produto')); return; }
+    if(!p || (!p.semEstoque && p.stock < somaPorProduto[productId])){ showToast('Estoque insuficiente para '+(p?p.name:'produto')); return; }
   }
   Object.keys(somaPorProduto).forEach(productId=>{
     const p = DB.products.find(x=>x.id===productId);
-    p.stock -= somaPorProduto[productId];
+    if(!p.semEstoque) p.stock -= somaPorProduto[productId];
     DB.movements.push({id:uid(), productId:p.id, productName:p.name, type:'saida', qty:somaPorProduto[productId], reason:'Venda (PDV)', operator:operatorName, date:nowISO()});
   });
   const produtosAgoraBaixos = Object.keys(somaPorProduto)
     .map(id=>DB.products.find(x=>x.id===id))
-    .filter(p=>p && p.stock<=(p.minStock||0));
+    .filter(p=>p && !p.semEstoque && p.stock<=(p.minStock||0));
   const sale = { id:uid(), date:nowISO(), operator:operatorName, items:cart.map(i=>({...i})), total, payMethod, sessionId:session.id, clientId: cliente?cliente.id:null, clientName: cliente?cliente.name:null, valorRecebido, troco, mistoBreakdown };
   DB.sales.push(sale);
   const saveOps = [saveKey(KEYS.products, DB.products), saveKey(KEYS.movements, DB.movements), saveKey(KEYS.sales, DB.sales)];
@@ -4055,16 +4069,18 @@ function renderEstoque(){
       <button class="${stockSubTab==='entrada'?'active':''}" onclick="stockSubTab='entrada';renderContent()">Entrada de Mercadoria</button>
       <button class="${stockSubTab==='saida'?'active':''}" onclick="stockSubTab='saida';renderContent()">Saída de Mercadoria</button>
       <button class="${stockSubTab==='historico'?'active':''}" onclick="stockSubTab='historico';renderContent()">Histórico</button>
+      ${(()=>{ const n = estoquesEstranhos().length; return n||stockSubTab==='conferir' ? `<button class="${stockSubTab==='conferir'?'active':''}" onclick="stockSubTab='conferir';renderContent()">🔎 Conferir estranhos${n?' <span class="nav-badge">'+n+'</span>':''}</button>` : ''; })()}
     </div>
     ${stockSubTab==='consulta'?renderConsulta():''}
     ${stockSubTab==='entrada'?renderEntradaNota()+(nfConferencia?'':renderMovForm('entrada')):''}
     ${stockSubTab==='saida'?renderMovForm('saida'):''}
     ${stockSubTab==='historico'?renderHistorico():''}
+    ${stockSubTab==='conferir'?renderEstranhos():''}
   `;
 }
 function renderConsulta(){
   const todos = [...DB.products].sort((a,b)=>a.name.localeCompare(b.name));
-  const baixos = todos.filter(p=>p.stock<=(p.minStock||0)).length;
+  const baixos = todos.filter(p=>!p.semEstoque && p.stock<=(p.minStock||0)).length;
   const termo = normalizarBusca(filtroConsultaEstoque.trim());
   const prods = termo ? todos.filter(p=>
     normalizarBusca(p.name).includes(termo) ||
@@ -4076,7 +4092,7 @@ function renderConsulta(){
   <div class="stat-row">
     <div class="stat"><div class="lbl">Produtos cadastrados</div><div class="val">${todos.length}</div></div>
     <div class="stat ${baixos>0?'bad':''}"><div class="lbl">Estoque baixo</div><div class="val">${baixos}</div></div>
-    <div class="stat accent"><div class="lbl">Valor em estoque (custo)</div><div class="val" style="font-size:18px;">${brl(todos.reduce((s,p)=>s+p.cost*p.stock,0))}</div></div>
+    <div class="stat accent"><div class="lbl">Valor em estoque (custo)</div><div class="val" style="font-size:18px;">${brl(todos.reduce((s,p)=>s+(p.semEstoque?0:(p.cost||0)*fatorKg(p)*(Number(p.stock)||0)),0))}</div></div>
   </div>
   <div class="card">
     <div class="flexbet"><h2>Consulta de Produtos</h2><span class="muted">Para editar preços ou cadastrar produtos, acesse a aba Cadastros (protegida por senha)</span></div>
@@ -4090,13 +4106,81 @@ function renderConsulta(){
             <td>${p.photoBase64?`<img class="prod-thumb" src="${p.photoBase64}">`:'<span class="prod-thumb-empty">📦</span>'}<strong>${escapeHtml(p.name)}</strong></td>
             <td class="mono muted">${escapeHtml(p.barcode||'—')}</td>
             <td>${escapeHtml(p.category||'—')}</td>
-            <td>${brl(p.price)}${p.saleType==='peso'?'/kg':''}</td>
-            <td>${p.stock}${p.saleType==='peso'?' kg':''}</td>
-            <td>${p.stock<=(p.minStock||0) ? '<span class="tag tag-low">Estoque baixo</span>' : '<span class="tag tag-ok">OK</span>'}</td>
+            <td>${precoTxt(p)}</td>
+            <td>${p.semEstoque?'<span class="muted">não controla</span>':p.stock+(p.saleType==='peso'?' kg':'')}</td>
+            <td>${p.semEstoque ? '<span class="tag tag-ok">Sempre tem</span>' : (p.stock<=(p.minStock||0) ? '<span class="tag tag-low">Estoque baixo</span>' : '<span class="tag tag-ok">OK</span>')}</td>
           </tr>`).join('')}
       </tbody>
     </table>`)}
   </div>`;
+}
+/* ---- Conferir estoques estranhos ----
+   Mostra o que parece errado (número gigante, vírgula em produto por unidade, muitos kg, negativo).
+   Nada muda sozinho: só quando aperta "Corrigir", "Não controlar estoque" ou "Está certo". */
+function estoqueMotivo(p){
+  if(p.semEstoque) return null;
+  const st = Number(p.stock)||0;
+  const ok = (DB.settings.estranhosOk||{})[p.id];
+  if(ok!==undefined && Number(ok)===st) return null;
+  if(st>=9999) return {tipo:'gigante', txt:'Número gigante (parece "estoque infinito")', sug:0};
+  if(st<0) return {tipo:'negativo', txt:'Estoque negativo', sug:0};
+  if(p.saleType!=='peso' && !Number.isInteger(+st.toFixed(3))) return {tipo:'virgula', txt:'Produto por unidade com vírgula (alguém vendeu 0,001?)', sug:Math.round(st)};
+  if(p.saleType==='peso' && p.preco100g && !p.kgConferido && st>0) return {tipo:'kg', txt:'Preço por 100 g: o estoque está em kg? Se foi contado em "porções de 100 g", em kg fica '+(st/10).toLocaleString('pt-BR',{maximumFractionDigits:3})+' kg', sug:+(st/10).toFixed(3)};
+  if(p.saleType==='peso' && st>=50) return p.preco100g
+    ? {tipo:'kg', txt:'Parece contado em "porções de 100 g". Em kg fica '+(st/10).toLocaleString('pt-BR',{maximumFractionDigits:3})+' kg', sug:+(st/10).toFixed(3)}
+    : {tipo:'kg', txt:'Muitos kg para produto por peso. Se o preço é por 100 g, marque isso no cadastro do produto.', sug:null};
+  return null;
+}
+function estoquesEstranhos(){ return (DB.products||[]).map(p=>({p, m:estoqueMotivo(p)})).filter(x=>x.m); }
+function renderEstranhos(){
+  const lista = estoquesEstranhos().sort((a,b)=>a.p.name.localeCompare(b.p.name));
+  return `<div class="card">
+    <h2>🔎 Conferir estoques estranhos</h2>
+    <div class="desc">Estes produtos estão com o estoque esquisito. <b>Nada muda sozinho.</b> Em cada um, escolha:<br>
+      <b>Corrigir</b> (coloque o número certo) · <b>Não controlar estoque</b> (pão, diversos) · <b>Está certo</b> (sai da lista).</div>
+    ${!lista.length ? '<div class="empty-state">✅ Nenhum estoque estranho.</div>' : `
+    <table><thead><tr><th>Produto</th><th>Estoque agora</th><th>O que parece errado</th><th>Estoque certo</th><th></th></tr></thead><tbody>
+    ${lista.map(({p,m})=>`<tr>
+      <td><strong>${escapeHtml(p.name)}</strong><br><span class="muted">${p.saleType==='peso'?'por peso · '+precoTxt(p):'por unidade · '+brl(p.price)}</span></td>
+      <td class="mono">${(Number(p.stock)||0).toLocaleString('pt-BR',{maximumFractionDigits:3})}${p.saleType==='peso'?' kg':''}</td>
+      <td>${escapeHtml(m.txt)}</td>
+      <td><input type="number" min="0" step="${p.saleType==='peso'?'0.001':'1'}" id="est_${p.id}" value="${m.sug===null?'':m.sug}" placeholder="${p.saleType==='peso'?'kg':'unid.'}" style="width:110px;"></td>
+      <td style="white-space:nowrap;">
+        <button class="btn btn-primary btn-sm" onclick="estranhoCorrigir('${p.id}')">Corrigir</button>
+        <button class="btn btn-outline btn-sm" onclick="estranhoSemControle('${p.id}')">Não controlar estoque</button>
+        <button class="btn btn-ghost btn-sm" onclick="estranhoEstaCerto('${p.id}')">Está certo</button>
+      </td></tr>`).join('')}
+    </tbody></table>`}
+  </div>`;
+}
+async function estranhoAjustar(p, novo, motivo){
+  const antes = Number(p.stock)||0; const dif = +(novo-antes).toFixed(3);
+  p.stock = +(+novo).toFixed(3);
+  if(dif) DB.movements.push({id:uid(), productId:p.id, productName:p.name, type:dif>0?'entrada':'saida', qty:Math.abs(dif), reason:'Ajuste de inventário — '+motivo+' (era '+antes+')', operator:operatorName, date:nowISO()});
+  await Promise.all([saveKey(KEYS.products, DB.products), saveKey(KEYS.movements, DB.movements), saveKey(KEYS.settings, DB.settings)]);
+}
+async function estranhoCorrigir(id){
+  const p = DB.products.find(x=>x.id===id); if(!p) return;
+  const v = parseFloat((document.getElementById('est_'+id)||{}).value);
+  if(!(v>=0)){ showToast('Digite o estoque certo de "'+p.name+'".'); return; }
+  if(p.saleType!=='peso' && !Number.isInteger(v)){ showToast('Produto por unidade: digite número inteiro.'); return; }
+  if(!confirm('Mudar o estoque de "'+p.name+'" de '+p.stock+' para '+v+(p.saleType==='peso'?' kg':'')+'?')) return;
+  if(p.preco100g) p.kgConferido = true;
+  await estranhoAjustar(p, v, 'conferência de estoque estranho');
+  showToast('✅ '+p.name+': estoque agora '+v+(p.saleType==='peso'?' kg':'')+'.'); renderContent();
+}
+async function estranhoSemControle(id){
+  const p = DB.products.find(x=>x.id===id); if(!p) return;
+  if(!confirm('"'+p.name+'" vai ficar sem controle de estoque (nunca falta, como pão e diversos). O número gigante some. Pode ser?')) return;
+  p.semEstoque = true;
+  await estranhoAjustar(p, 0, 'passou a não controlar estoque');
+  showToast('✅ '+p.name+': não controla mais estoque.'); renderContent();
+}
+async function estranhoEstaCerto(id){
+  const p = DB.products.find(x=>x.id===id); if(!p) return;
+  DB.settings.estranhosOk = DB.settings.estranhosOk || {}; DB.settings.estranhosOk[id] = Number(p.stock)||0;
+  if(p.preco100g) p.kgConferido = true;
+  await Promise.all([saveKey(KEYS.settings, DB.settings), saveKey(KEYS.products, DB.products)]); renderContent();
 }
 function renderMovForm(type){
   const prods = [...DB.products].sort((a,b)=>a.name.localeCompare(b.name));
@@ -4112,12 +4196,13 @@ function renderMovForm(type){
       <label>Produto (ou bipe o código de barras)</label>
       <input list="movProdList" id="movBusca" placeholder="Digite ou bipe o código de barras..." onchange="onMovBuscaChange()">
       <datalist id="movProdList">${prods.map(p=>`<option value="${escapeHtml(p.name)}" data-id="${p.id}">${escapeHtml(p.barcode||'')}</option>`).join('')}</datalist>
-      <select id="movProduto" style="margin-top:8px;">
+      <select id="movProduto" style="margin-top:8px;" onchange="movAtualizarUnidade()">
         ${prods.map(p=>`<option value="${p.id}" ${preSelecionar===p.id?'selected':''} data-barcode="${escapeHtml(p.barcode||'')}">${escapeHtml(p.name)} (estoque: ${p.stock})</option>`).join('')}
       </select>
     </div>
     <div class="grid2" style="gap:12px;">
-      <div class="field"><label>Quantidade</label><input type="number" min="0.001" step="0.001" id="movQtd" placeholder="0"></div>
+      <div class="field"><label id="movQtdLabel">Quantidade</label><input type="number" min="0.001" step="0.001" id="movQtd" placeholder="0" oninput="movAtualizarUnidade()">
+        <div id="movComo" style="margin-top:6px;"></div><div id="movTotal" class="small-note" style="margin-top:4px;font-weight:700;"></div></div>
       <div class="field">
         <label>Motivo</label>
         <select id="movMotivo">
@@ -4145,7 +4230,7 @@ function onMovBuscaChange(){
   const byBarcode = DB.products.find(p=>p.barcode===val);
   const byName = DB.products.find(p=>p.name===val);
   const target = byBarcode || byName;
-  if(target){ sel.value = target.id; return; }
+  if(target){ sel.value = target.id; movAtualizarUnidade(); return; }
   const confirmou = confirm('Item não cadastrado: "'+val+'".\n\nDeseja cadastrar esse produto agora?');
   if(confirmou){
     const ehCodigoBarras = /^[0-9]{4,}$/.test(val);
@@ -4155,16 +4240,39 @@ function onMovBuscaChange(){
     document.getElementById('movBusca').value='';
   }
 }
+let movEmEmbalagem = true;
+function movProdutoAtual(){ const el = document.getElementById('movProduto'); return el ? DB.products.find(x=>x.id===el.value) : null; }
+function fmtQtdEstoque(p, q){
+  if(p && p.saleType==='peso'){ const g = Math.round(q*1000); return q.toLocaleString('pt-BR',{maximumFractionDigits:3})+' kg'+(q<1&&q>0?' ('+g+' g)':''); }
+  return q.toLocaleString('pt-BR',{maximumFractionDigits:3})+(q===1?' unidade':' unidades');
+}
+// Quanto entra/sai no estoque (sempre na unidade de venda: unidade ou kg)
+function movQtdEstoque(){
+  const p = movProdutoAtual(); const q = parseFloat((document.getElementById('movQtd')||{}).value)||0;
+  if(p && p.saleType!=='peso' && p.embQtd>1 && movEmEmbalagem) return q * p.embQtd;
+  return q;
+}
+function movAtualizarUnidade(){
+  const p = movProdutoAtual(); const como = document.getElementById('movComo'); const tot = document.getElementById('movTotal'); const lab = document.getElementById('movQtdLabel');
+  if(!como || !tot || !lab) return;
+  const temEmb = p && p.saleType!=='peso' && p.embQtd>1;
+  lab.textContent = p && p.saleType==='peso' ? 'Peso (kg)' : (temEmb && movEmEmbalagem ? 'Quantas '+(p.embNome||'caixa').toLowerCase()+'s' : 'Quantidade (unidades)');
+  como.innerHTML = temEmb ? `<div class="mov-un">
+      <button type="button" class="${movEmEmbalagem?'on':''}" onclick="movEmEmbalagem=true;movAtualizarUnidade()">📦 ${escapeHtml(p.embNome||'Caixa')} com ${p.embQtd}</button>
+      <button type="button" class="${movEmEmbalagem?'':'on'}" onclick="movEmEmbalagem=false;movAtualizarUnidade()">1️⃣ Unidade</button></div>` : '';
+  const q = parseFloat((document.getElementById('movQtd')||{}).value)||0;
+  tot.textContent = p && q>0 ? '= '+fmtQtdEstoque(p, movQtdEstoque())+' no estoque' : (p && p.saleType==='peso' ? 'Ex.: peça de 3,5 kg → digite 3,5' : '');
+}
 async function registrarMovimento(type){
   const productId = document.getElementById('movProduto').value;
-  const qty = parseFloat(document.getElementById('movQtd').value);
+  const qty = +movQtdEstoque().toFixed(3);
   const reason = document.getElementById('movMotivo').value;
   const obs = document.getElementById('movObs').value.trim();
   const p = DB.products.find(x=>x.id===productId);
   if(!p){ showToast('Produto não encontrado. Atualize a página e tente novamente.'); return; }
   if(!qty || qty<=0){ showToast('Informe uma quantidade válida.'); return; }
   if(type==='saida' && p.stock < qty){ showToast('Estoque insuficiente para essa saída.'); return; }
-  p.stock += (type==='entrada'? qty : -qty);
+  p.stock = +((Number(p.stock)||0) + (type==='entrada'? qty : -qty)).toFixed(3);
   let nfNumero = null, nfData = null, nfSeq = null;
   if(type==='entrada'){
     nfNumero = document.getElementById('movNfNumero').value.trim() || null;
@@ -4177,7 +4285,7 @@ async function registrarMovimento(type){
   }
   DB.movements.push({id:uid(), productId:p.id, productName:p.name, type, qty, reason:obs?reason+' — '+obs:reason, operator:operatorName, date:nowISO(), nfNumero, nfData, nfSeq});
   await Promise.all([saveKey(KEYS.products, DB.products), saveKey(KEYS.movements, DB.movements)]);
-  showToast(type==='entrada'?'Entrada registrada.':'Saída registrada.');
+  showToast((type==='entrada'?'Entrada registrada: +':'Saída registrada: -')+fmtQtdEstoque(p, qty)+' de '+p.name+'.', 5000);
   renderContent();
 }
 /* ================================================================
@@ -4649,6 +4757,7 @@ function nfPrepararConferencia(nota){
     it.productId = achado ? achado.id : '';
     it.como = achado ? achado.como : '';
     if(achado && achado.embalagem) it.embalagem = achado.embalagem;
+    else if(achado) nfEmbDoCadastro(it);
     it.qtdEntrada = +(it.qCom * it.embalagem).toFixed(3);
   });
   nota.atualizarCusto = false;
@@ -4658,6 +4767,14 @@ function nfPrepararConferencia(nota){
   const ja = nfJaImportada(nota.chave);
   if(ja) showToast('⚠️ Esta nota JÁ foi lançada antes. Não confirme de novo.', 8000);
   else showToast('✅ Nota carregada: '+nota.itens.length+' itens. Confira e confirme no final.', 5000);
+}
+// Nota em caixa/bandeja/dúzia e o produto vendido por unidade: usa "vem com N" do cadastro
+function nfEmbDoCadastro(it){
+  const p = DB.products.find(x=>x.id===it.productId); if(!p || it.embalagem!==1) return;
+  const u = String(it.uCom||'').toUpperCase().replace(/[^A-Z]/g,'');
+  if(p.saleType!=='peso' && p.embQtd>1 && !['UN','UND','UNID','UNIDADE','PC','PCA','PECA','KG','G','GR'].includes(u)){
+    it.embalagem = p.embQtd; it.qtdEntrada = +(it.qCom*it.embalagem).toFixed(3);
+  }
 }
 function nfProdutoNome(id){ const p = DB.products.find(x=>x.id===id); return p ? p.name : ''; }
 function renderConferenciaNota(){
@@ -4697,7 +4814,7 @@ function renderConferenciaNota(){
                :`<button class="btn btn-outline btn-sm" style="margin-top:4px;" onclick="nfCadastrarNovo(${i})">➕ Cadastrar produto novo</button>`}
           </td>
           <td class="right"><input type="number" min="1" step="1" class="nf-num" value="${it.embalagem}" onchange="nfMudarEmbalagem(${i}, this.value)" title="Quantas unidades vêm em cada ${escapeHtml(it.uCom)}"></td>
-          <td class="right"><input type="number" min="0" step="0.001" class="nf-num" value="${it.qtdEntrada}" onchange="nfMudarQtd(${i}, this.value)"></td>
+          <td class="right"><input type="number" min="0" step="0.001" class="nf-num" value="${it.qtdEntrada}" onchange="nfMudarQtd(${i}, this.value)"><div class="muted" style="font-size:11px;">${p?(p.saleType==='peso'?'kg':'unidades'):''}${p&&p.saleType==='peso'&&!/^KG/i.test(it.uCom)?' ⚖️ confira o peso':''}</div></td>
         </tr>`;}).join('')}
       </tbody>
     </table>
@@ -4713,6 +4830,7 @@ function nfEscolherProduto(i, val){
   const p = DB.products.find(x=>x.name===val) || (k ? DB.products.find(x=>chaveCodigo(x.barcode)===k) : null) || DB.products.find(x=>chaveNome(x.name)===chaveNome(val));
   if(!p){ showToast('Produto não encontrado: "'+val+'". Escolha da lista ou use "Cadastrar produto novo".', 6000); renderContent(); return; }
   it.productId = p.id; it.como = 'você';
+  nfEmbDoCadastro(it);
   renderContent();
 }
 function nfMudarEmbalagem(i, v){
@@ -4736,6 +4854,7 @@ function nfProdutoCadastrado(prod){
   if(nfConferencia && nfAguardandoCadastroIdx!==null && nfConferencia.itens[nfAguardandoCadastroIdx]){
     const it = nfConferencia.itens[nfAguardandoCadastroIdx];
     it.productId = prod.id; it.como = 'cadastro novo';
+    nfEmbDoCadastro(it);
   }
   nfAguardandoCadastroIdx = null;
 }
@@ -4770,7 +4889,7 @@ async function nfConfirmarEntrada(){
     p.stock = +((Number(p.stock)||0) + qty).toFixed(3);
     if(n.atualizarCusto && qty>0){
       const custoUn = (it.vProd - it.vDesc + it.vFrete + it.vOutro + it.icms.vICMSST + it.vIPI) / qty;
-      if(custoUn>0) p.cost = +custoUn.toFixed(2);
+      if(custoUn>0) p.cost = +(custoUn / fatorKg(p)).toFixed(2);
     }
     seq++;
     DB.movements.push({id:uid(), productId:p.id, productName:p.name, type:'entrada', qty,
@@ -5565,6 +5684,7 @@ function renderEdicaoItensVendaModal(){
 function onEdicaoItemMudaQtd(idx, val){
   const q = parseFloat(val);
   if(!q || q<=0){ showToast('Quantidade inválida.'); renderEdicaoItensVendaModal(); return; }
+  if(edicaoVendaItens[idx].saleType!=='peso' && !Number.isInteger(q)){ showToast('Produto por unidade: digite um número inteiro.'); renderEdicaoItensVendaModal(); return; }
   edicaoVendaItens[idx].qty = q;
   renderEdicaoItensVendaModal();
 }
@@ -5584,9 +5704,9 @@ function adicionarItemEdicaoVenda(){
   const p = DB.products.find(x=>x.id===productId);
   if(!p){ showToast('Produto não encontrado.'); return; }
   if(!qty || qty<=0){ showToast('Informe uma quantidade válida.'); return; }
-  const existente = edicaoVendaItens.find(i=>i.productId===productId && i.price===p.price);
+  const existente = edicaoVendaItens.find(i=>i.productId===productId && i.price===precoKg(p));
   if(existente) existente.qty += qty;
-  else edicaoVendaItens.push({productId:p.id, name:p.name, price:p.price, cost:p.cost||0, qty, saleType:p.saleType||'unidade'});
+  else edicaoVendaItens.push({productId:p.id, name:p.name, price:precoKg(p), cost:+((p.cost||0)*fatorKg(p)).toFixed(4), qty, saleType:p.saleType||'unidade'});
   renderEdicaoItensVendaModal();
 }
 async function salvarEdicaoItensVenda(){
@@ -5615,7 +5735,7 @@ async function salvarEdicaoItensVenda(){
   Object.keys(porProdutoAntigo).forEach(productId=>{
     const p = DB.products.find(x=>x.id===productId);
     if(p){
-      p.stock += porProdutoAntigo[productId];
+      if(!p.semEstoque) p.stock += porProdutoAntigo[productId];
       const mov = {id:uid(), productId:p.id, productName:p.name, type:'entrada', qty:porProdutoAntigo[productId], reason:'Estorno — edição de venda', operator:operatorName, date:nowISO()};
       DB.movements.push(mov);
       movimentosEstorno.push(mov);
@@ -5626,12 +5746,12 @@ async function salvarEdicaoItensVenda(){
   edicaoVendaItens.forEach(i=>{ porProdutoNovo[i.productId] = (porProdutoNovo[i.productId]||0) + i.qty; });
   for(const productId in porProdutoNovo){
     const p = DB.products.find(x=>x.id===productId);
-    if(!p || p.stock < porProdutoNovo[productId]){
+    if(!p || (!p.semEstoque && p.stock < porProdutoNovo[productId])){
       showToast('Estoque insuficiente para '+(p?p.name:'produto')+' — a edição foi cancelada e o estoque original não foi alterado.');
       // desfaz o estorno acima pra não deixar o estoque inconsistente
       Object.keys(porProdutoAntigo).forEach(productId2=>{
         const p2 = DB.products.find(x=>x.id===productId2);
-        if(p2) p2.stock -= porProdutoAntigo[productId2];
+        if(p2 && !p2.semEstoque) p2.stock -= porProdutoAntigo[productId2];
       });
       DB.movements = DB.movements.filter(m=>movimentosEstorno.indexOf(m)===-1);
       return;
@@ -5640,7 +5760,7 @@ async function salvarEdicaoItensVenda(){
   // 3) Retira do estoque os itens NOVOS
   Object.keys(porProdutoNovo).forEach(productId=>{
     const p = DB.products.find(x=>x.id===productId);
-    p.stock -= porProdutoNovo[productId];
+    if(!p.semEstoque) p.stock -= porProdutoNovo[productId];
     DB.movements.push({id:uid(), productId:p.id, productName:p.name, type:'saida', qty:porProdutoNovo[productId], reason:'Venda (PDV) — editada', operator:operatorName, date:nowISO()});
   });
   // 4) Recalcula o total e ajusta fiado / detalhes de pagamento que dependiam do valor antigo
@@ -5684,7 +5804,7 @@ async function excluirVenda(id){
   s.items.forEach(item=>{
     const p = DB.products.find(x=>x.id===item.productId);
     if(p){
-      p.stock += item.qty;
+      if(!p.semEstoque) p.stock += item.qty;
       DB.movements.push({id:uid(), productId:p.id, productName:p.name, type:'entrada', qty:item.qty, reason:'Estorno — venda excluída', operator:operatorName, date:nowISO()});
     }
   });
@@ -6462,7 +6582,7 @@ function renderProdutosCad(){
             <td class="muted">${escapeHtml(fornecedorNome(p.supplierId))}</td>
             <td>${p.saleType==='peso'?'Peso (Kg)':'Unidade'}</td>
             <td>${brl(p.cost)}</td>
-            <td>${brl(p.price)}${p.saleType==='peso'?'/kg':''}</td>
+            <td>${precoTxt(p)}</td>
             <td>${p.stock}${p.saleType==='peso'?' kg':''}</td>
             <td class="right">
               <button class="btn btn-outline btn-sm" onclick="openProductModal('${p.id}')">Editar</button>
@@ -6527,9 +6647,26 @@ function openProductModal(id, prefilledBarcode, prefilledName){
             <option value="peso" ${p&&p.saleType==='peso'?'selected':''}>Peso — Kg (ex: hortifruti, frios, padaria)</option>
           </select>
         </div>
+        <label style="display:flex;gap:8px;align-items:flex-start;margin:4px 0 12px;font-size:14px;text-transform:none;letter-spacing:0;font-weight:400;color:inherit;"><input type="checkbox" id="mSemEstoque" style="width:auto;margin-top:3px;" ${p&&p.semEstoque?'checked':''}> <span><b>Não controlar estoque</b> <span class="muted">(pão, produto feito na loja, "diversos": nunca falta, não pede estoque)</span></span></label>
+        <div class="field un-compra" id="mBoxEmb" style="${p&&p.saleType==='peso'?'display:none':''}">
+          <label>📦 Como vem do fornecedor <span class="muted">(opcional)</span></label>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <span>Vem em</span>
+            <select id="mEmbNome" style="width:auto;">${['','Caixa','Bandeja','Fardo','Pacote','Dúzia','Cartela','Display'].map(x=>`<option value="${x}" ${(p&&p.embNome||'')===x?'selected':''}>${x||'— só unidade —'}</option>`).join('')}</select>
+            <span>com</span>
+            <input type="number" min="1" step="1" id="mEmbQtd" value="${p&&p.embQtd>1?p.embQtd:''}" placeholder="30" style="width:90px;">
+            <span>unidades</span>
+          </div>
+          <div class="small-note">Ex.: ovo vem em <b>Bandeja com 30</b>. Na entrada você digita "2 bandejas" e entram <b>60 unidades</b>. A venda continua por unidade.</div>
+        </div>
+        <div class="field un-compra" id="mBoxPeso" style="${p&&p.saleType==='peso'?'':'display:none'}">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;"><b>⚖️ O preço é por:</b>
+            <select id="mPrecoPor" style="width:auto;" onchange="onMudaTipoVendaProduto()"><option value="kg" ${p&&p.preco100g?'':'selected'}>1 kg</option><option value="100g" ${p&&p.preco100g?'selected':''}>100 gramas (frios)</option></select></div>
+          <div class="small-note" style="margin:0;">⚖️ <b>Produto por peso</b> (ex.: mortadela): o estoque é <b>em kg</b>. O preço pode ser por kg ou por 100 g. Na entrada, coloque o peso que chegou em kg (ex.: peça de 3,5 kg). Na venda, digite o peso em kg (<b>0,250</b>) ou em gramas (<b>250</b>) que o gestor entende.</div>
+        </div>
         <div class="grid2" style="gap:12px;">
-          <div class="field"><label>Preço de custo (R$)</label><input type="number" step="0.01" id="mCusto" value="${p?p.cost:''}" placeholder="0,00"></div>
-          <div class="field"><label>Preço de venda (R$) <span class="muted" id="mPrecoSufixo">${p&&p.saleType==='peso'?'(por kg)':''}</span></label><input type="number" step="0.01" id="mPreco" value="${p?p.price:''}" placeholder="0,00"></div>
+          <div class="field"><label>Preço de custo (R$) <span class="muted" id="mCustoSufixo">${p&&p.saleType==='peso'?(p.preco100g?'(por 100 g)':'(por kg)'):'(por unidade)'}</span></label><input type="number" step="0.01" id="mCusto" value="${p?p.cost:''}" placeholder="0,00"></div>
+          <div class="field"><label>Preço de venda (R$) <span class="muted" id="mPrecoSufixo">${p&&p.saleType==='peso'?(p.preco100g?'(por 100 g)':'(por kg)'):''}</span></label><input type="number" step="0.01" id="mPreco" value="${p?p.price:''}" placeholder="0,00"></div>
         </div>
         <div class="grid2" style="gap:12px;">
           <div class="field"><label>Estoque ${p?'atual':'inicial'}</label><input type="number" step="${p&&p.saleType==='peso'?'0.001':'1'}" min="0" id="mEstoque" value="${p?p.stock:0}" placeholder="0"></div>
@@ -6547,7 +6684,12 @@ function onMudaTipoVendaProduto(){
   const isPeso = document.getElementById('mSaleType').value==='peso';
   document.getElementById('mEstoque').step = isPeso ? '0.001' : '1';
   document.getElementById('mMin').step = isPeso ? '0.001' : '1';
-  document.getElementById('mPrecoSufixo').textContent = isPeso ? '(por kg)' : '';
+  const por100 = isPeso && (document.getElementById('mPrecoPor')||{}).value==='100g';
+  const suf = isPeso ? (por100 ? '(por 100 g)' : '(por kg)') : '';
+  document.getElementById('mPrecoSufixo').textContent = suf;
+  const cs = document.getElementById('mCustoSufixo'); if(cs) cs.textContent = isPeso ? suf : '(por unidade)';
+  const be = document.getElementById('mBoxEmb'), bp = document.getElementById('mBoxPeso');
+  if(be) be.style.display = isPeso ? 'none' : ''; if(bp) bp.style.display = isPeso ? '' : 'none';
 }
 async function lerBarcodeCadastro(){
   if(!('BarcodeDetector' in window)){ showToast('Câmera de leitura não suportada neste navegador. Use o leitor USB ou digite manualmente.'); return; }
@@ -6821,6 +6963,12 @@ async function saveProduct(id){
   const stock = parseFloat(document.getElementById('mEstoque').value)||0;
   const minStock = parseFloat(document.getElementById('mMin').value)||0;
   const photoBase64 = document.getElementById('mFotoBase64').value || null;
+  const embQtdIn = Math.round(parseFloat((document.getElementById('mEmbQtd')||{}).value)||0);
+  const embNomeIn = ((document.getElementById('mEmbNome')||{}).value||'').trim();
+  const embQtd = (saleType!=='peso' && embQtdIn>1) ? embQtdIn : 0;
+  const embNome = embQtd ? (embNomeIn || 'Caixa') : '';
+  const semEstoque = !!(document.getElementById('mSemEstoque')||{}).checked;
+  const preco100g = saleType==='peso' && (document.getElementById('mPrecoPor')||{}).value==='100g';
   if(!name || price<=0){ showToast('Informe ao menos o nome e o preço de venda.'); return; }
   const mesmoCodigo = barcode && chaveCodigo(barcode) ? DB.products.find(p=>p.id!==id && chaveCodigo(p.barcode)===chaveCodigo(barcode)) : null;
   if(mesmoCodigo){ showToast('❌ Não é permitido cadastro duplicado. Esse código de barras já é do produto "'+mesmoCodigo.name+'". Abra esse produto para editar.', 9000); return; }
@@ -6833,9 +6981,9 @@ async function saveProduct(id){
   let novoProdutoCriado = null;
   if(id){
     const p = DB.products.find(x=>x.id===id);
-    Object.assign(p, {name, brand, category, supplierId, barcode, saleType, cost, price, stock, minStock, photoBase64});
+    Object.assign(p, {name, brand, category, supplierId, barcode, saleType, cost, price, stock, minStock, photoBase64, embNome, embQtd, semEstoque, preco100g});
   }else{
-    novoProdutoCriado = {id:uid(), name, brand, category, supplierId, barcode, saleType, cost, price, stock, minStock, photoBase64, createdAt:nowISO()};
+    novoProdutoCriado = {id:uid(), name, brand, category, supplierId, barcode, saleType, cost, price, stock, minStock, photoBase64, embNome, embQtd, semEstoque, preco100g, createdAt:nowISO()};
     DB.products.push(novoProdutoCriado);
   }
   await saveKey(KEYS.products, DB.products);
@@ -7817,7 +7965,7 @@ async function iniciarBackupAutomatico(){
 /* ================================================================
    ATUALIZAÇÕES — verifica no GitHub se existe versão mais nova
    ================================================================ */
-const APP_VERSAO = '2.6.1';
+const APP_VERSAO = '2.6.2';
 const URL_VERSAO = 'https://raw.githubusercontent.com/serfico21-arch/pdv/main/versao.json';
 const URL_REPO_OK = 'https://github.com/serfico21-arch/pdv/';
 let _upd = { checando:false, ultima:null, info:null, erro:null, avisou:false };
