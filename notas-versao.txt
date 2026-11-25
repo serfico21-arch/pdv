@@ -1,3 +1,8 @@
+Frios com preço por 100 g: no cadastro escolha "O preço é por 100 gramas"; na venda digite o peso da balança (0,250 ou 250 gramas) e o valor sai certo
+Ovos e caixas: no cadastro diga "vem em Bandeja com 30"; na entrada digite 2 bandejas e entram 60 unidades
+Nova opção "Não controlar estoque" para pão, diversos e o que é feito na loja (sem número gigante)
+Nova tela Estoque > Conferir estranhos: mostra estoques errados e você corrige um por um (nada muda sozinho)
+Venda por unidade não aceita mais vírgula (evita estoque 24,5)
 Celular mais fácil: aponte a câmera do celular para o quadrado do gestor uma vez e pronto, sem digitar código
 Entrada pela nota fiscal: bipe o código de barras do DANFE, escolha o XML e os itens da nota aparecem sozinhos para conferir e confirmar
 Leitor no celular: leia o QR do cupom ou o código do DANFE com o celular e o gestor abre sozinho a Entrada de Mercadoria com a nota
