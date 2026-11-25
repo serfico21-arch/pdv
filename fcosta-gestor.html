@@ -2531,6 +2531,9 @@ tr:last-child td{border-bottom:none;}
 .nf-card h2{margin-bottom:6px;}
 .nf-chave-ok{background:#e3efe1; border-radius:10px; padding:12px 14px; margin:6px 0 12px; line-height:1.6;}
 .nf-alerta{background:#fbe6e1; color:var(--vermelho); border-radius:10px; padding:10px 12px; margin:8px 0; font-weight:600;}
+.nf-celular{display:flex; gap:14px; flex-wrap:wrap; align-items:center; background:#eef0fb; border-radius:10px; padding:12px 14px; margin:8px 0 14px; font-size:14px; line-height:1.5;}
+.nf-celular-on{background:#e3efe1;}
+.nf-celular-qr{background:#fff; border-radius:8px; padding:4px; line-height:0;}
 .nf-passos{background:#fff6e5; border-radius:10px; padding:10px 12px; margin-bottom:10px; font-size:14px; line-height:1.5;}
 .nf-botoes{display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;}
 .nf-botoes .btn{cursor:pointer;}
@@ -4213,16 +4216,17 @@ function renderEntradaNota(){
   return `
   <div class="card nf-card">
     <h2>📄 Entrada pela nota fiscal</h2>
-    <div class="desc">Bipe o código de barras do DANFE (o papel que vem com a mercadoria). Depois escolha o arquivo XML da nota e os itens aparecem sozinhos para você só conferir.</div>
+    <div class="desc">Bipe o código de barras do DANFE (o papel que vem com a mercadoria) ou o QR Code do cupom. Os itens aparecem para você só conferir.</div>
+    ${renderLeitorCelular()}
     <div class="field">
       <label>Código de barras do DANFE ou QR Code do cupom fiscal</label>
       <input id="nfChaveInput" class="mono" inputmode="numeric" autocomplete="off" placeholder="Bipe aqui o código de barras do DANFE ou o QR Code do cupom..." value="${k?escapeHtml(k.chave):''}"
         onkeydown="if(event.key==='Enter'){event.preventDefault();nfConferirChave();}" onchange="nfConferirChave()">
       <div class="nf-botoes" style="margin-top:8px;">
         <button class="btn btn-outline btn-sm" onclick="nfAbrirCamera()">📷 Ler QR do cupom pela câmera</button>
-        <label class="btn btn-outline btn-sm">🖼️ Ler QR de uma foto<input type="file" accept="image/*" style="display:none" onchange="nfQrDeFoto(this)"></label>
+        <label class="btn btn-outline btn-sm" style="text-transform:none;letter-spacing:0;">🖼️ Ler de uma foto ou PDF escaneado<input type="file" accept="image/*,application/pdf,.pdf" style="display:none" onchange="nfQrDeFoto(this)"></label>
       </div>
-      <div class="small-note" style="margin-top:6px;">Sem leitor de QR? Digite os 44 números da "chave de acesso" impressos no cupom e aperte Enter. Ou use a câmera, ou uma foto do QR tirada no celular.</div>
+      <div class="small-note" style="margin-top:6px;">Sem leitor de QR? Digite os 44 números da "chave de acesso" impressos no cupom e aperte Enter. Ou use a câmera, uma foto, ou o PDF do scanner (nota ou cupom).</div>
     </div>
     ${k ? `
       <div class="nf-chave-ok">
@@ -4326,22 +4330,94 @@ function nfFecharCamera(){
   if(nfCamStream){ nfCamStream.getTracks().forEach(t=>t.stop()); nfCamStream=null; }
   if(document.getElementById('nfCamVideo')) closeModal();
 }
+// Procura QR no canvas: imagem inteira e depois pedaços ampliados (QR pequeno em cupom escaneado)
+function nfProcurarQrNoCanvas(src, soRapido){
+  const W = src.width, H = src.height;
+  const tentar = (sx,sy,sw,sh,alvo)=>{
+    const esc = Math.min(3, alvo/Math.max(sw,sh));
+    const cv = document.createElement('canvas'); cv.width = Math.max(1,Math.round(sw*esc)); cv.height = Math.max(1,Math.round(sh*esc));
+    const ctx = cv.getContext('2d', {willReadFrequently:true}); ctx.imageSmoothingEnabled = true; ctx.drawImage(src,sx,sy,sw,sh,0,0,cv.width,cv.height);
+    const d = ctx.getImageData(0,0,cv.width,cv.height);
+    const r = jsQR(d.data, d.width, d.height, {inversionAttempts:'attemptBoth'});
+    return r && r.data ? r.data : null;
+  };
+  for(const alvo of [1600, 1000]){ const r = tentar(0,0,W,H,alvo); if(r) return r; }
+  if(soRapido) return null;
+  const menor = Math.min(W,H);
+  for(const frac of [0.5, 0.35, 0.25]){
+    const lado = Math.round(menor*frac), passo = Math.max(1, Math.round(lado/2));
+    for(let y=0; y<=H-lado+passo; y+=passo){
+      for(let x=0; x<=W-lado+passo; x+=passo){
+        const sx = Math.min(x, W-lado), sy = Math.min(y, H-lado);
+        const r = tentar(Math.max(0,sx), Math.max(0,sy), Math.min(lado,W), Math.min(lado,H), 700);
+        if(r) return r;
+      }
+    }
+  }
+  return null;
+}
+function nfChaveNoTexto(texto){
+  const linhas = String(texto||'').split(/\n/);
+  const blocos = linhas.map(l=>l.replace(/\D/g,'')).concat([String(texto||'').replace(/\D/g,'')]);
+  for(const d of blocos){
+    for(let i=0; i+44<=d.length; i++){ const c = d.slice(i,i+44); const r = nfLerChave(c); if(!r.erro) return c; }
+  }
+  return null;
+}
+let _pdfjsPromise = null;
+function nfCarregarPdfJs(){
+  if(window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if(_pdfjsPromise) return _pdfjsPromise;
+  _pdfjsPromise = new Promise((ok,erro)=>{
+    const sc = document.createElement('script');
+    sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    sc.onload = ()=>{ try{ window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; ok(window.pdfjsLib); }catch(e){ erro(e); } };
+    sc.onerror = ()=>{ _pdfjsPromise = null; erro(new Error('sem internet')); };
+    document.head.appendChild(sc);
+  });
+  return _pdfjsPromise;
+}
+async function nfLerPdf(file){
+  showToast('Lendo o PDF... aguarde.', 4000);
+  let pdfjs;
+  try{ pdfjs = await nfCarregarPdfJs(); }catch(e){ showToast('❌ Para ler PDF o computador precisa de internet. Ou digite os 44 números da chave.', 8000); return; }
+  try{
+    const pdf = await pdfjs.getDocument({data: await file.arrayBuffer()}).promise;
+    const pag = await pdf.getPage(1);
+    // 1) QR Code (cupom) — leva direto aos itens na SEFAZ
+    const vp = pag.getViewport({scale: 3});
+    const cv = document.createElement('canvas'); cv.width = Math.round(vp.width); cv.height = Math.round(vp.height);
+    await pag.render({canvasContext: cv.getContext('2d'), viewport: vp}).promise;
+    let qr = nfProcurarQrNoCanvas(cv, true);
+    if(qr){ showToast('✅ QR Code lido do PDF!'); nfQrEncontrado(qr); return; }
+    // 2) Números da chave escritos no papel (texto do PDF escaneado)
+    const tc = await pag.getTextContent();
+    let texto = ''; let ultY = null;
+    for(const it of tc.items){ const y = it.transform ? Math.round(it.transform[5]) : 0; texto += (ultY!==null && Math.abs(y-ultY)>3 ? '\n' : ' ') + it.str; ultY = y; }
+    const chave = nfChaveNoTexto(texto);
+    // Nota (DANFE, modelo 55): a chave basta. Cupom (65): tenta achar o QR, que leva direto aos itens.
+    if(chave && chave.slice(20,22)!=='65'){ showToast('✅ Chave lida do PDF!'); nfQrEncontrado(chave); return; }
+    await new Promise(r=>setTimeout(r,30));
+    qr = nfProcurarQrNoCanvas(cv, false);
+    if(qr){ showToast('✅ QR Code lido do PDF!'); nfQrEncontrado(qr); return; }
+    if(chave){ showToast('✅ Chave lida do PDF!'); nfQrEncontrado(chave); return; }
+    showToast('❌ Não achei o QR Code nem a chave nesse PDF. Digite os 44 números da chave que estão no papel.', 9000);
+  }catch(e){ console.error(e); showToast('❌ Não consegui abrir esse PDF.', 6000); }
+}
 function nfQrDeFoto(input){
   const f = input.files && input.files[0]; input.value=''; if(!f) return;
+  if(/pdf$/i.test(f.type) || /\.pdf$/i.test(f.name)){ nfLerPdf(f); return; }
+  showToast('Procurando o QR Code na foto...', 3000);
   const img = new Image(); const url = URL.createObjectURL(f);
   img.onload = ()=>{
-    let achado = null;
-    for(const lado of [1600, 1000, 2400]){
-      const esc = Math.min(1, lado/Math.max(img.width,img.height));
-      const cv = document.createElement('canvas'); cv.width = Math.round(img.width*esc); cv.height = Math.round(img.height*esc);
-      const ctx = cv.getContext('2d'); ctx.drawImage(img,0,0,cv.width,cv.height);
-      const d = ctx.getImageData(0,0,cv.width,cv.height);
-      const r = jsQR(d.data, d.width, d.height, {inversionAttempts:'attemptBoth'});
-      if(r && r.data){ achado = r.data; break; }
-    }
-    URL.revokeObjectURL(url);
-    if(achado){ showToast('✅ QR Code lido da foto!'); nfQrEncontrado(achado); }
-    else showToast('❌ Não achei o QR Code nessa foto. Tire outra mais perto, reta e com luz. Ou digite os 44 números da chave que estão no cupom.', 9000);
+    setTimeout(()=>{
+      const cv = document.createElement('canvas'); cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+      cv.getContext('2d').drawImage(img,0,0);
+      const achado = nfProcurarQrNoCanvas(cv);
+      URL.revokeObjectURL(url);
+      if(achado){ showToast('✅ QR Code lido da foto!'); nfQrEncontrado(achado); }
+      else showToast('❌ Não achei o QR Code nessa foto. Tire outra mais perto, reta e com luz. Ou digite os 44 números da chave que estão no cupom.', 9000);
+    }, 50);
   };
   img.onerror = ()=>{ URL.revokeObjectURL(url); showToast('❌ Não consegui abrir essa foto.'); };
   img.src = url;
@@ -4383,6 +4459,92 @@ function nfLerTextoCupom(){
     nfPrepararConferencia(nota);
   }catch(e){ showToast('❌ '+e.message, 9000); }
 }
+/* ---- Leitor no celular: o celular lê o código e manda; o gestor pega sozinho ----
+   Usa o mesmo banco da loja (Supabase). Só funciona com internet e com o código da loja. */
+const LEITOR_SB_URL = 'https://avvhnajfczdedlydkcrb.supabase.co';
+const LEITOR_SB_KEY = 'sb_publishable_y3y3sLLFrm5HrXDa2ttGTA_dl8vouP7';
+const LEITOR_LOJA = 'pinheiro-costa';
+const LEITOR_LINK = 'https://serfico21-arch.github.io/Pessoal/mercado/leitor/';
+let leitorFila = [], leitorEstado = '', leitorBuscando = false;
+function renderLeitorCelular(){
+  const cod = DB.settings.leitorCodigo || '';
+  if(!cod) return `
+    <div class="nf-celular">
+      <div style="width:100%;"><strong>📱 Leitor no celular</strong> — leia o QR do cupom ou o código do DANFE com o celular e ele aparece aqui sozinho.</div>
+      <div class="nf-botoes" style="align-items:center;">
+        <input id="leitorCodigoInput" placeholder="Código da loja (o mesmo da Central)" style="max-width:300px;">
+        <button class="btn btn-primary btn-sm" onclick="leitorLigar()">Ligar celular</button>
+      </div>
+    </div>`;
+  return `
+    <div class="nf-celular nf-celular-on">
+      <div style="flex:1;min-width:220px;">
+        <strong>📱 Leitor no celular ligado</strong><br>
+        <span class="muted">${leitorEstado ? escapeHtml(leitorEstado) : 'Esperando o celular mandar uma nota...'}</span><br>
+        <span class="small-note">No celular, abra o link (ou aponte a câmera para o quadrinho ao lado):<br><span class="mono">${escapeHtml(LEITOR_LINK)}</span></span><br>
+        <button class="btn btn-outline btn-sm" style="margin-top:6px;" onclick="leitorDesligar()">Desligar</button>
+      </div>
+      <div class="nf-celular-qr">${gerarQRCodeSVG(LEITOR_LINK, 120)}</div>
+    </div>`;
+}
+async function leitorLigar(){
+  const el = document.getElementById('leitorCodigoInput');
+  const v = (el ? el.value : '').trim().toUpperCase();
+  if(v.length<6){ showToast('Digite o código da loja (o mesmo que você usa na Central).'); return; }
+  DB.settings.leitorCodigo = v; leitorEstado = 'Ligando...';
+  await saveKey(KEYS.settings, DB.settings);
+  renderContent(); leitorBuscar(true);
+}
+async function leitorDesligar(){
+  if(!confirm('Desligar o leitor do celular neste computador?')) return;
+  DB.settings.leitorCodigo = ''; leitorEstado = ''; await saveKey(KEYS.settings, DB.settings); renderContent();
+}
+function leitorNaTelaDeEntrada(){ return currentTab==='estoque' && stockSubTab==='entrada'; }
+async function leitorBuscar(forcar){
+  const cod = DB.settings && DB.settings.leitorCodigo;
+  if(!cod || leitorBuscando) return;
+  if(!forcar && (!leitorNaTelaDeEntrada() || document.hidden || navigator.onLine===false)) return;
+  leitorBuscando = true;
+  let novoEstado = leitorEstado;
+  try{
+    const r = await fetch(LEITOR_SB_URL+'/rest/v1/rpc/mercado_pegar_leituras', {method:'POST',
+      headers:{apikey:LEITOR_SB_KEY, Authorization:'Bearer '+LEITOR_SB_KEY, 'Content-Type':'application/json'},
+      body: JSON.stringify({p_slug:LEITOR_LOJA, p_codigo:cod})});
+    if(r.status===404) novoEstado = '⚠️ O leitor ainda não foi ligado no Supabase (falta rodar o comando).';
+    else if(!r.ok) novoEstado = '⚠️ Não consegui falar com o celular agora. Tento de novo sozinho.';
+    else{
+      const lista = await r.json();
+      if(lista===null) novoEstado = '⚠️ Código da loja errado. Aperte "Desligar" e ligue de novo com o código certo.';
+      else{
+        novoEstado = '✅ Ligado. Esperando o celular mandar uma nota...';
+        (lista||[]).forEach(x=>{ if(x && x.conteudo) leitorFila.push(String(x.conteudo)); });
+      }
+    }
+  }catch(e){ novoEstado = '⚠️ Sem internet. Tento de novo sozinho.'; }
+  leitorBuscando = false;
+  const mudou = novoEstado!==leitorEstado; leitorEstado = novoEstado;
+  if(leitorFila.length && !nfConferencia && leitorNaTelaDeEntrada()){ leitorProcessarFila(); return; }
+  if(mudou && !nfConferencia && leitorNaTelaDeEntrada() && !document.querySelector('.modal-bg')){
+    const ativo = document.activeElement; const focoId = ativo && ativo.id;
+    if(!focoId || (focoId!=='nfTextoCupom' && focoId!=='movQtd' && focoId!=='movBusca' && focoId!=='nfChaveInput' && focoId!=='leitorCodigoInput')) renderContent();
+  }
+}
+function leitorProcessarFila(){
+  const conteudo = leitorFila.shift(); if(!conteudo) return;
+  if(document.querySelector('.modal-bg')) { leitorFila.unshift(conteudo); return; }
+  nfChaveLida = null; nfTextoCupom = '';
+  showToast('📱 Chegou do celular!', 4000);
+  if(/https?:|\?p=|www\./i.test(conteudo)) nfLerQrCupom(conteudo);
+  else{
+    const r = nfLerChave(conteudo);
+    if(r.erro){ showToast('❌ O celular mandou um código que não é de nota.'); renderContent(); return; }
+    if(r.modelo==='65'){ r.url = 'https://www.nfce.fazenda.sp.gov.br/consulta'; r.digitada = true; }
+    nfChaveLida = r; renderContent();
+    if(nfJaImportada(r.chave)) showToast('⚠️ Esta nota já foi lançada antes.', 6000);
+  }
+  if(leitorFila.length) setTimeout(()=>showToast('📱 Há mais '+leitorFila.length+' nota(s) do celular esperando. Termine esta primeiro.', 6000), 4500);
+}
+setInterval(()=>leitorBuscar(false), 4000);
 async function nfAbrirSiteXml(){
   if(!nfChaveLida) return;
   try{ await navigator.clipboard.writeText(nfChaveLida.chave); showToast('Chave copiada. No site, cole com Ctrl+V. Baixe o XML e depois escolha o arquivo aqui.', 8000); }
@@ -4606,6 +4768,7 @@ async function nfConfirmarEntrada(){
   nfConferencia = null; nfChaveLida = null; nfTextoCupom = "";
   showToast('✅ Entrada da nota nº '+nfNumero+' feita: '+itens.length+' itens somados no estoque.', 6000);
   renderContent();
+  if(leitorFila.length) setTimeout(leitorProcessarFila, 1500);
 }
 function renderHistorico(){
   const todosMovs = [...DB.movements].sort((a,b)=>new Date(b.date)-new Date(a.date));
