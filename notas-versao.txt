@@ -1,3 +1,9 @@
+Entrada pela nota fiscal: bipe o código de barras do DANFE, escolha o XML e os itens da nota aparecem sozinhos para conferir e confirmar
+Leitor no celular: leia o QR do cupom ou o código do DANFE com o celular e o gestor abre sozinho a Entrada de Mercadoria com a nota
+Ler a nota ou o cupom direto do PDF do scanner ou de uma foto (acha o QR Code ou a chave sozinho)
+Sem leitor de QR: leia o QR pela câmera do computador, por uma foto, ou digite os 44 números da chave
+Cupom fiscal (NFC-e): bipe o QR Code, abra o cupom na SEFAZ, copie a página (Ctrl+A, Ctrl+C) e cole no gestor; os itens aparecem para conferir
+A nota já lançada é avisada para o estoque não ficar dobrado; o produto de cada fornecedor fica lembrado para a próxima nota
 Número da versão grande e amarelo no topo; janela "Gestor atualizado!" mostra a versão nova depois de atualizar
 Cadastro pelo código de barras: ao bipar, nome, marca, categoria e foto são preenchidos sozinhos (preço e estoque continuam com você)
 Aviso ao administrador explicando as novidades (fotos e produtos repetidos)
