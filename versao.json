@@ -1,10 +1,11 @@
 {
-  "versao": "2.6.2",
+  "versao": "2.6.3",
   "data": "2026-11-25",
   "instalador": "https://github.com/serfico21-arch/pdv/raw/main/FCostaGestor-Instalador.exe",
   "html": "https://github.com/serfico21-arch/pdv/raw/main/fcosta-gestor.html",
-  "sha256": "fcc322de7d0222e3063925914434791eb540ee87b30685ffdfead69bad941abe",
+  "sha256": "370ddc63a9642a378de196df3bd728fdec79dd1cc6281d682b1b02b9ccfefef1",
   "notas": [
+    "Entrada e saída: escolha em que está contando (kg, gramas, unidade, caixa, bandeja, fardo...). O gestor converte sozinho para a unidade do produto e mostra quanto vai para o estoque",
     "Frios com preço por 100 g: no cadastro escolha \"O preço é por 100 gramas\"; na venda digite o peso da balança (0,250 ou 250 gramas) e o valor sai certo",
     "Ovos e caixas: no cadastro diga \"vem em Bandeja com 30\"; na entrada digite 2 bandejas e entram 60 unidades",
     "Nova opção \"Não controlar estoque\" para pão, diversos e o que é feito na loja (sem número gigante)",
