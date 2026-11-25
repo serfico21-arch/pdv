@@ -4212,17 +4212,23 @@ function renderEntradaNota(){
     <h2>📄 Entrada pela nota fiscal</h2>
     <div class="desc">Bipe o código de barras do DANFE (o papel que vem com a mercadoria). Depois escolha o arquivo XML da nota e os itens aparecem sozinhos para você só conferir.</div>
     <div class="field">
-      <label>Código de barras do DANFE (chave de acesso)</label>
-      <input id="nfChaveInput" class="mono" inputmode="numeric" autocomplete="off" placeholder="Bipe aqui o código de barras do DANFE..." value="${k?escapeHtml(k.chave):''}"
+      <label>Código de barras do DANFE ou QR Code do cupom fiscal</label>
+      <input id="nfChaveInput" class="mono" inputmode="numeric" autocomplete="off" placeholder="Bipe aqui o código de barras do DANFE ou o QR Code do cupom..." value="${k?escapeHtml(k.chave):''}"
         onkeydown="if(event.key==='Enter'){event.preventDefault();nfConferirChave();}" onchange="nfConferirChave()">
     </div>
     ${k ? `
       <div class="nf-chave-ok">
-        <div><strong>✅ Chave conferida</strong> · Nota nº <strong>${escapeHtml(k.numero)}</strong> série ${escapeHtml(k.serie)} · ${k.modelo==='55'?'NF-e':'Modelo '+escapeHtml(k.modelo)} · ${escapeHtml(k.uf)} · emitida em ${escapeHtml(k.aamm)}</div>
+        <div><strong>✅ Chave conferida</strong> · Nota nº <strong>${escapeHtml(k.numero)}</strong> série ${escapeHtml(k.serie)} · ${k.modelo==='55'?'NF-e':(k.modelo==='65'?'Cupom fiscal (NFC-e)':'Modelo '+escapeHtml(k.modelo))} · ${escapeHtml(k.uf)} · emitida em ${escapeHtml(k.aamm)}</div>
         <div class="muted">Fornecedor (CNPJ): ${escapeHtml(nfFormatarCNPJ(k.cnpj))} ${nfNomeFornecedorPorCnpj(k.cnpj)?'· '+escapeHtml(nfNomeFornecedorPorCnpj(k.cnpj)):''}</div>
         <div class="mono muted" style="font-size:12px;">${escapeHtml(nfFormatarChave(k.chave))}</div>
         ${ja?`<div class="nf-alerta">⚠️ Esta nota JÁ foi lançada em ${new Date(ja.importadaEm).toLocaleString('pt-BR')} (${ja.itens} itens). Não lance de novo, senão o estoque fica dobrado.</div>`:''}
       </div>`:''}
+    ${k&&k.url?`
+      <div class="nf-passos"><strong>Cupom fiscal (QR Code):</strong> 1) aperte "Abrir o cupom na SEFAZ" · 2) na página que abrir, aperte <strong>Ctrl+A</strong> e depois <strong>Ctrl+C</strong> · 3) volte aqui, clique na caixa abaixo, aperte <strong>Ctrl+V</strong> e depois "Ler os itens do cupom".</div>
+      <div class="nf-botoes"><button class="btn btn-primary" onclick="nfAbrirCupomSefaz()">🌐 1. Abrir o cupom na SEFAZ</button></div>
+      <textarea id="nfTextoCupom" rows="4" style="width:100%;margin-top:10px;" placeholder="3. Cole aqui (Ctrl+V) o que copiou da página da SEFAZ...">${escapeHtml(nfTextoCupom)}</textarea>
+      <button class="btn btn-primary btn-block" style="margin-top:8px;" onclick="nfLerTextoCupom()">📋 Ler os itens do cupom</button>
+    `:`
     ${k?`<div class="nf-passos"><strong>Próximo passo:</strong> 1) aperte "Buscar a nota no Meu Danfe" · 2) lá, cole a chave (Ctrl+V) e baixe o XML · 3) volte aqui e aperte "Escolher o XML da nota" (fica na pasta Downloads).</div>`:''}
     <div class="nf-botoes">
       ${k?`<button class="btn btn-primary" onclick="nfAbrirSiteXml()">🌐 1. Buscar a nota no Meu Danfe (grátis)</button>`:''}
@@ -4230,8 +4236,8 @@ function renderEntradaNota(){
         <input type="file" accept=".xml,text/xml,application/xml" style="display:none" onchange="nfArquivoEscolhido(this)">
       </label>
     </div>
-    <div id="nfSoltarAqui" class="nf-soltar" ondragover="event.preventDefault();this.classList.add('on')" ondragleave="this.classList.remove('on')" ondrop="nfSoltarArquivo(event)">ou arraste o arquivo XML para cá</div>
-    <div class="small-note">💡 Se o Meu Danfe não tiver a nota: peça o XML ao fornecedor (por lei ele tem que mandar o XML para quem comprou; peça para enviar sempre para o seu e-mail). Enquanto isso, você pode dar entrada item por item no quadro de baixo.</div>
+    <div id="nfSoltarAqui" class="nf-soltar" ondragover="event.preventDefault();this.classList.add('on')" ondragleave="this.classList.remove('on')" ondrop="nfSoltarArquivo(event)">ou arraste o arquivo XML para cá</div>`}
+    <div class="small-note">💡 Cupom fiscal: bipe o QR Code (precisa de leitor que lê QR). Se o Meu Danfe não tiver a nota: peça o XML ao fornecedor (por lei ele tem que mandar o XML para quem comprou; peça para enviar sempre para o seu e-mail). Enquanto isso, você pode dar entrada item por item no quadro de baixo.</div>
   </div>`;
 }
 function nfNomeFornecedorPorCnpj(cnpj){ const f = DB.suppliers.find(s=>s.cnpj && s.cnpj===cnpj); return f ? f.name : ''; }
@@ -4239,12 +4245,69 @@ function nfConferirChave(){
   const el = document.getElementById('nfChaveInput'); if(!el) return;
   const val = el.value.trim();
   if(!val){ nfChaveLida=null; renderContent(); return; }
+  if(/https?:|\?p=|www\./i.test(val)) return nfLerQrCupom(val);
   const r = nfLerChave(val);
   if(r.erro){ nfChaveLida=null; showToast('❌ '+r.erro, 7000); el.select(); return; }
   if(nfChaveLida && nfChaveLida.chave===r.chave) return;
   nfChaveLida = r;
   renderContent();
   if(nfJaImportada(r.chave)) showToast('⚠️ Esta nota já foi lançada antes.', 6000);
+}
+/* ---- Cupom fiscal (NFC-e) pelo QR Code ----
+   O QR abre a consulta pública da SEFAZ, que mostra os itens sem certificado.
+   O gestor não pode ler outro site sozinho (o navegador bloqueia), então:
+   abre a página, a pessoa copia tudo (Ctrl+A, Ctrl+C) e cola aqui. */
+function nfLerQrCupom(val){
+  let url = val.trim();
+  if(!/^https?:/i.test(url)) url = 'https://'+url.replace(/^\/+/,'');
+  const m = url.match(/[?&]p=([^&]+)/i) || url.match(/chNFe=(\d{44})/i);
+  const digitos = m ? decodeURIComponent(m[1]).replace(/\D/g,'') : '';
+  const r = nfLerChave(digitos.slice(0,44));
+  if(r.erro){ showToast('❌ Não consegui ler esse QR Code. Bipe de novo o QR do cupom.', 7000); return; }
+  r.url = url;
+  if(nfChaveLida && nfChaveLida.chave===r.chave) return;
+  nfChaveLida = r; nfTextoCupom = '';
+  renderContent();
+  if(nfJaImportada(r.chave)) showToast('⚠️ Este cupom já foi lançado antes.', 6000);
+}
+let nfTextoCupom = '';
+function nfAbrirCupomSefaz(){ if(nfChaveLida && nfChaveLida.url) window.open(nfChaveLida.url, '_blank'); }
+function nfNumBR(v){ const n = parseFloat(String(v||'').replace(/\./g,'').replace(',','.')); return isFinite(n)? n : 0; }
+function nfParseTextoCupom(texto){
+  const t = String(texto||'').replace(/\r/g,'').replace(/[ \t\u00a0]+/g,' ');
+  const re = /([^\n]+?)\s*\(\s*C[óo]digo\s*:\s*([^)]*?)\s*\)\s*Qtde\.?\s*:?\s*([\d.,]+)\s*UN\s*:?\s*([A-Za-z0-9]+)\s*Vl\.?\s*Unit\.?\s*:?\s*([\d.,]+)\s*Vl\.?\s*Total\s*:?\s*([\d.,]+)/gi;
+  const itens = []; let m;
+  while((m = re.exec(t))){
+    const cod = m[2].trim(), q = nfNumBR(m[3]), vu = nfNumBR(m[5]), vt = nfNumBR(m[6]);
+    itens.push({ nItem:String(itens.length+1), cProd:cod, ean:/^\d{8,14}$/.test(cod)?cod:'', eanTrib:'', xProd:m[1].trim(), ncm:'', cest:'', cfop:'',
+      uCom:m[4], qCom:q, vUnCom:vu, vProd:vt, uTrib:m[4], qTrib:q, vDesc:0, vFrete:0, vOutro:0,
+      icms:{cst:'',vBC:0,pICMS:0,vICMS:0,vICMSST:0}, vIPI:0, vPIS:0, vCOFINS:0, embalagem:1 });
+  }
+  if(!itens.length) throw new Error('Não achei os itens no texto colado. Na página da SEFAZ, aperte Ctrl+A e depois Ctrl+C, e cole aqui de novo.');
+  const cnpjM = t.match(/CNPJ\s*:?\s*([\d./-]{14,18})/i);
+  const linhas = t.split('\n').map(l=>l.trim()).filter(Boolean);
+  const iC = linhas.findIndex(l=>/CNPJ/i.test(l));
+  const nome = iC>0 ? linhas[iC-1].replace(/^(Consulta|Documento|DANFE|NFC-e).*$/i,'') : '';
+  const chaveM = t.replace(/\s/g,'').match(/\d{44}/);
+  const numM = t.match(/N[úu]mero\s*:?\s*(\d+)/i), serM = t.match(/S[ée]rie\s*:?\s*(\d+)/i);
+  const dataM = t.match(/Emiss[ãa]o\s*:?\s*(\d{2})\/(\d{2})\/(\d{4})/i);
+  const totM = t.match(/Valor\s+a\s+pagar\s*R?\$?\s*:?\s*([\d.,]+)/i) || t.match(/Valor\s+total\s*R?\$?\s*:?\s*([\d.,]+)/i);
+  const vProd = itens.reduce((a,i)=>a+i.vProd,0);
+  const k = nfChaveLida;
+  return { chave: k ? k.chave : (chaveM ? chaveM[0] : ''), numero: k ? k.numero : (numM?numM[1]:''), serie: k ? k.serie : (serM?serM[1]:''),
+    dataEmissao: dataM ? dataM[3]+'-'+dataM[2]+'-'+dataM[1] : '', natOp:'Cupom fiscal (NFC-e)', tpNF:'1', cupom:true,
+    fornecedor:{ cnpj: cnpjM ? cnpjM[1].replace(/\D/g,'') : (k?k.cnpj:''), nome: nome||'Fornecedor do cupom', fantasia:'', ie:'', endereco:'', telefone:'' },
+    destinatario:{cnpj:'',nome:''},
+    totais:{ vProd, vNF: totM ? nfNumBR(totM[1]) : vProd, vICMS:0, vST:0, vIPI:0, vPIS:0, vCOFINS:0, vFrete:0, vDesc:0 }, itens };
+}
+function nfLerTextoCupom(){
+  const el = document.getElementById('nfTextoCupom'); nfTextoCupom = el ? el.value : '';
+  if(!nfTextoCupom.trim()){ showToast('Cole aqui o texto da página do cupom (Ctrl+V).'); return; }
+  try{
+    const nota = nfParseTextoCupom(nfTextoCupom);
+    if(nfChaveLida && nota.chave && nota.chave!==nfChaveLida.chave){ showToast('❌ Esse texto é de outro cupom.'); return; }
+    nfPrepararConferencia(nota);
+  }catch(e){ showToast('❌ '+e.message, 9000); }
 }
 async function nfAbrirSiteXml(){
   if(!nfChaveLida) return;
@@ -4326,6 +4389,9 @@ function nfCarregarXml(texto){
     return;
   }
   if(nota.tpNF==='0') showToast('⚠️ Atenção: essa nota é de ENTRADA do emitente (não é uma venda para você). Confira com cuidado.', 8000);
+  nfPrepararConferencia(nota);
+}
+function nfPrepararConferencia(nota){
   nota.itens.forEach(it=>{
     const achado = nfAcharProduto(nota, it);
     it.productId = achado ? achado.id : '';
@@ -4423,7 +4489,7 @@ function nfProdutoCadastrado(prod){
 }
 function nfCancelar(){
   if(!confirm('Cancelar a conferência desta nota? Nada foi lançado no estoque.')) return;
-  nfConferencia = null; nfChaveLida = null; renderContent();
+  nfConferencia = null; nfChaveLida = null; nfTextoCupom = ''; renderContent();
 }
 async function nfConfirmarEntrada(){
   const n = nfConferencia; if(!n) return;
@@ -4463,7 +4529,7 @@ async function nfConfirmarEntrada(){
   DB.settings.notasEntrada = DB.settings.notasEntrada || [];
   DB.settings.notasEntrada.push({chave:n.chave, numero:nfNumero, serie:n.serie, dataEmissao:nfData, fornecedor:n.fornecedor.nome, cnpj, valor:n.totais.vNF, itens:itens.length, importadaEm:agora, operador:operatorName});
   await Promise.all([saveKey(KEYS.products, DB.products), saveKey(KEYS.movements, DB.movements), saveKey(KEYS.suppliers, DB.suppliers), saveKey(KEYS.settings, DB.settings)]);
-  nfConferencia = null; nfChaveLida = null;
+  nfConferencia = null; nfChaveLida = null; nfTextoCupom = "";
   showToast('✅ Entrada da nota nº '+nfNumero+' feita: '+itens.length+' itens somados no estoque.', 6000);
   renderContent();
 }
