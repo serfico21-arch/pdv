@@ -4465,7 +4465,7 @@ const LEITOR_SB_URL = 'https://avvhnajfczdedlydkcrb.supabase.co';
 const LEITOR_SB_KEY = 'sb_publishable_y3y3sLLFrm5HrXDa2ttGTA_dl8vouP7';
 const LEITOR_LOJA = 'pinheiro-costa';
 const LEITOR_LINK = 'https://serfico21-arch.github.io/Pessoal/mercado/leitor/';
-let leitorFila = [], leitorEstado = '', leitorBuscando = false;
+let leitorFila = [], leitorEstado = '', leitorBuscando = false, leitorAvisouOcupado = false;
 function renderLeitorCelular(){
   const cod = DB.settings.leitorCodigo || '';
   if(!cod) return `
@@ -4503,7 +4503,7 @@ function leitorNaTelaDeEntrada(){ return currentTab==='estoque' && stockSubTab==
 async function leitorBuscar(forcar){
   const cod = DB.settings && DB.settings.leitorCodigo;
   if(!cod || leitorBuscando) return;
-  if(!forcar && (!leitorNaTelaDeEntrada() || document.hidden || navigator.onLine===false)) return;
+  if(!forcar && navigator.onLine===false) return;
   leitorBuscando = true;
   let novoEstado = leitorEstado;
   try{
@@ -4523,7 +4523,16 @@ async function leitorBuscar(forcar){
   }catch(e){ novoEstado = '⚠️ Sem internet. Tento de novo sozinho.'; }
   leitorBuscando = false;
   const mudou = novoEstado!==leitorEstado; leitorEstado = novoEstado;
-  if(leitorFila.length && !nfConferencia && leitorNaTelaDeEntrada()){ leitorProcessarFila(); return; }
+  if(leitorFila.length && !nfConferencia){
+    // Vai sozinho para Estoque > Entrada de Mercadoria, menos no meio de uma venda ou com janela aberta
+    const ocupado = document.querySelector('.modal-bg') || (currentTab==='pdv' && cart && cart.length);
+    if(!ocupado){
+      if(!leitorNaTelaDeEntrada()){ currentTab='estoque'; stockSubTab='entrada'; renderNav(); }
+      leitorProcessarFila(); return;
+    }
+    if(!leitorAvisouOcupado){ leitorAvisouOcupado = true; showToast('📱 Chegou nota do celular. Termine a venda (ou feche a janela) que eu abro a Entrada de Mercadoria.', 8000); }
+  }
+  if(!leitorFila.length) leitorAvisouOcupado = false;
   if(mudou && !nfConferencia && leitorNaTelaDeEntrada() && !document.querySelector('.modal-bg')){
     const ativo = document.activeElement; const focoId = ativo && ativo.id;
     if(!focoId || (focoId!=='nfTextoCupom' && focoId!=='movQtd' && focoId!=='movBusca' && focoId!=='nfChaveInput' && focoId!=='leitorCodigoInput')) renderContent();
@@ -4532,6 +4541,7 @@ async function leitorBuscar(forcar){
 function leitorProcessarFila(){
   const conteudo = leitorFila.shift(); if(!conteudo) return;
   if(document.querySelector('.modal-bg')) { leitorFila.unshift(conteudo); return; }
+  leitorAvisouOcupado = false;
   nfChaveLida = null; nfTextoCupom = '';
   showToast('📱 Chegou do celular!', 4000);
   if(/https?:|\?p=|www\./i.test(conteudo)) nfLerQrCupom(conteudo);
