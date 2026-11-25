@@ -2528,6 +2528,20 @@ tr:last-child td{border-bottom:none;}
 .prod-thumb-empty{width:36px; height:36px; border-radius:8px; background:var(--creme-2); display:inline-flex; align-items:center; justify-content:center; margin-right:8px; vertical-align:middle; flex-shrink:0; font-size:14px;}
 .empty-state{text-align:center; padding:40px 20px; color:#a39a86;}
 .flexbet{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+.nf-card h2{margin-bottom:6px;}
+.nf-chave-ok{background:#e3efe1; border-radius:10px; padding:12px 14px; margin:6px 0 12px; line-height:1.6;}
+.nf-alerta{background:#fbe6e1; color:var(--vermelho); border-radius:10px; padding:10px 12px; margin:8px 0; font-weight:600;}
+.nf-botoes{display:flex; gap:10px; flex-wrap:wrap; margin-top:4px;}
+.nf-botoes .btn{cursor:pointer;}
+.nf-soltar{border:2px dashed var(--linha); border-radius:10px; padding:14px; text-align:center; color:#8b8270; margin-top:12px; font-size:13px;}
+.nf-soltar.on{border-color:var(--verde-900); background:#e3efe1;}
+.nf-cab{display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; margin:12px 0; line-height:1.5;}
+.nf-tabela-wrap{overflow-x:auto;}
+.nf-tabela td{vertical-align:top;}
+.nf-tabela tr.nf-sem{background:#fff6e5;}
+.nf-num{width:80px; text-align:right;}
+.nf-prod-input{width:100%;}
+.nf-check{display:flex; gap:8px; align-items:center; margin-top:14px; font-size:14px;}
 .small-note{font-size:12px; color:#8b8270; margin-top:10px; line-height:1.5;}
 .scan-feedback{margin-top:8px; padding:9px 13px; border-radius:9px; font-size:13.5px; display:none; align-items:center; gap:8px; flex-wrap:wrap;}
 .scan-feedback.show{display:flex;}
@@ -4035,7 +4049,7 @@ function renderEstoque(){
       <button class="${stockSubTab==='historico'?'active':''}" onclick="stockSubTab='historico';renderContent()">Histórico</button>
     </div>
     ${stockSubTab==='consulta'?renderConsulta():''}
-    ${stockSubTab==='entrada'?renderMovForm('entrada'):''}
+    ${stockSubTab==='entrada'?renderEntradaNota()+(nfConferencia?'':renderMovForm('entrada')):''}
     ${stockSubTab==='saida'?renderMovForm('saida'):''}
     ${stockSubTab==='historico'?renderHistorico():''}
   `;
@@ -4156,6 +4170,299 @@ async function registrarMovimento(type){
   DB.movements.push({id:uid(), productId:p.id, productName:p.name, type, qty, reason:obs?reason+' — '+obs:reason, operator:operatorName, date:nowISO(), nfNumero, nfData, nfSeq});
   await Promise.all([saveKey(KEYS.products, DB.products), saveKey(KEYS.movements, DB.movements)]);
   showToast(type==='entrada'?'Entrada registrada.':'Saída registrada.');
+  renderContent();
+}
+/* ================================================================
+   ENTRADA PELA NOTA FISCAL (DANFE / XML da NF-e)
+   1) Bipa o código de barras do DANFE -> chave de 44 dígitos (conferida)
+   2) Escolhe o XML da nota -> itens carregados sozinhos
+   3) Confere item por item e confirma -> soma no estoque
+   Nada muda sem o "Confirmar entrada". Preço de venda nunca é mexido.
+   ================================================================ */
+let nfChaveLida = null;      // {chave, uf, aamm, cnpj, modelo, serie, numero}
+let nfConferencia = null;    // nota carregada do XML, aguardando conferência
+let nfAguardandoCadastroIdx = null;
+const NF_UF = {11:'RO',12:'AC',13:'AM',14:'RR',15:'PA',16:'AP',17:'TO',21:'MA',22:'PI',23:'CE',24:'RN',25:'PB',26:'PE',27:'AL',28:'SE',29:'BA',31:'MG',32:'ES',33:'RJ',35:'SP',41:'PR',42:'SC',43:'RS',50:'MS',51:'MT',52:'GO',53:'DF'};
+function nfFormatarChave(c){ return String(c||'').replace(/(\d{4})(?=\d)/g,'$1 '); }
+function nfFormatarCNPJ(c){ c=String(c||''); return c.length===14 ? c.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/,'$1.$2.$3/$4-$5') : (c.length===11 ? c.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/,'$1.$2.$3-$4') : c); }
+function nfDigitoChave(c43){
+  let soma=0, peso=2;
+  for(let i=c43.length-1;i>=0;i--){ soma += Number(c43[i])*peso; peso = peso===9 ? 2 : peso+1; }
+  const r = soma % 11;
+  return (r===0||r===1) ? 0 : 11-r;
+}
+function nfLerChave(txt){
+  const chave = String(txt||'').replace(/\D/g,'');
+  if(chave.length!==44) return {erro:'A chave precisa ter 44 números. Foram lidos '+chave.length+'. Bipe de novo o código de barras do DANFE.'};
+  if(nfDigitoChave(chave.slice(0,43))!==Number(chave[43])) return {erro:'Essa chave não confere (o último número está errado). Bipe de novo, com calma.'};
+  const uf = NF_UF[Number(chave.slice(0,2))];
+  if(!uf) return {erro:'Essa chave não é de nota fiscal (estado inválido).'};
+  const modelo = chave.slice(20,22);
+  return {chave, uf, aamm:chave.slice(4,6)+'/20'+chave.slice(2,4), cnpj:chave.slice(6,20), modelo,
+          serie:String(Number(chave.slice(22,25))), numero:String(Number(chave.slice(25,34)))};
+}
+function nfJaImportada(chave){ return (DB.settings.notasEntrada||[]).find(n=>n.chave===chave) || null; }
+function renderEntradaNota(){
+  if(nfConferencia) return renderConferenciaNota();
+  const k = nfChaveLida;
+  const ja = k ? nfJaImportada(k.chave) : null;
+  return `
+  <div class="card nf-card">
+    <h2>📄 Entrada pela nota fiscal</h2>
+    <div class="desc">Bipe o código de barras do DANFE (o papel que vem com a mercadoria). Depois escolha o arquivo XML da nota e os itens aparecem sozinhos para você só conferir.</div>
+    <div class="field">
+      <label>Código de barras do DANFE (chave de acesso)</label>
+      <input id="nfChaveInput" class="mono" inputmode="numeric" autocomplete="off" placeholder="Bipe aqui o código de barras do DANFE..." value="${k?escapeHtml(k.chave):''}"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();nfConferirChave();}" onchange="nfConferirChave()">
+    </div>
+    ${k ? `
+      <div class="nf-chave-ok">
+        <div><strong>✅ Chave conferida</strong> · Nota nº <strong>${escapeHtml(k.numero)}</strong> série ${escapeHtml(k.serie)} · ${k.modelo==='55'?'NF-e':'Modelo '+escapeHtml(k.modelo)} · ${escapeHtml(k.uf)} · emitida em ${escapeHtml(k.aamm)}</div>
+        <div class="muted">Fornecedor (CNPJ): ${escapeHtml(nfFormatarCNPJ(k.cnpj))} ${nfNomeFornecedorPorCnpj(k.cnpj)?'· '+escapeHtml(nfNomeFornecedorPorCnpj(k.cnpj)):''}</div>
+        <div class="mono muted" style="font-size:12px;">${escapeHtml(nfFormatarChave(k.chave))}</div>
+        ${ja?`<div class="nf-alerta">⚠️ Esta nota JÁ foi lançada em ${new Date(ja.importadaEm).toLocaleString('pt-BR')} (${ja.itens} itens). Não lance de novo, senão o estoque fica dobrado.</div>`:''}
+      </div>`:''}
+    <div class="nf-botoes">
+      <label class="btn btn-primary">📂 Escolher o XML da nota
+        <input type="file" accept=".xml,text/xml,application/xml" style="display:none" onchange="nfArquivoEscolhido(this)">
+      </label>
+      ${k?`<button class="btn btn-outline" onclick="nfAbrirSiteXml()">🌐 Copiar a chave e tentar baixar o XML grátis</button>`:''}
+    </div>
+    <div id="nfSoltarAqui" class="nf-soltar" ondragover="event.preventDefault();this.classList.add('on')" ondragleave="this.classList.remove('on')" ondrop="nfSoltarArquivo(event)">ou arraste o arquivo XML para cá</div>
+    <div class="small-note">💡 Onde achar o XML: o fornecedor costuma mandar por e-mail junto com a nota. O botão "tentar baixar grátis" copia a chave e abre o site Meu Danfe (cole a chave lá; nem toda nota aparece). Baixar direto da SEFAZ, sem ninguém mandar, só é possível com o certificado digital A1 do mercado.</div>
+  </div>`;
+}
+function nfNomeFornecedorPorCnpj(cnpj){ const f = DB.suppliers.find(s=>s.cnpj && s.cnpj===cnpj); return f ? f.name : ''; }
+function nfConferirChave(){
+  const el = document.getElementById('nfChaveInput'); if(!el) return;
+  const val = el.value.trim();
+  if(!val){ nfChaveLida=null; renderContent(); return; }
+  const r = nfLerChave(val);
+  if(r.erro){ nfChaveLida=null; showToast('❌ '+r.erro, 7000); el.select(); return; }
+  if(nfChaveLida && nfChaveLida.chave===r.chave) return;
+  nfChaveLida = r;
+  renderContent();
+  if(nfJaImportada(r.chave)) showToast('⚠️ Esta nota já foi lançada antes.', 6000);
+}
+async function nfAbrirSiteXml(){
+  if(!nfChaveLida) return;
+  try{ await navigator.clipboard.writeText(nfChaveLida.chave); showToast('Chave copiada. No site, cole com Ctrl+V. Baixe o XML e depois escolha o arquivo aqui.', 8000); }
+  catch(e){ showToast('Copie a chave: '+nfChaveLida.chave, 10000); }
+  window.open('https://meudanfe.com.br/', '_blank');
+}
+function nfSoltarArquivo(ev){
+  ev.preventDefault();
+  const f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+  if(f) nfLerArquivo(f);
+}
+function nfArquivoEscolhido(input){ const f = input.files && input.files[0]; input.value=''; if(f) nfLerArquivo(f); }
+function nfLerArquivo(file){
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    try{ nfCarregarXml(String(reader.result||'')); }
+    catch(e){ console.error(e); showToast('❌ '+(e.message||'Não consegui ler esse arquivo XML.'), 8000); }
+  };
+  reader.onerror = ()=>showToast('❌ Não consegui abrir o arquivo.');
+  reader.readAsText(file);
+}
+function nfTag(el, nome){ if(!el) return null; const l = el.getElementsByTagNameNS('*', nome); return l.length? l[0] : (el.getElementsByTagName(nome)[0]||null); }
+function nfTxt(el, nome){ const t = nfTag(el, nome); return t ? (t.textContent||'').trim() : ''; }
+function nfNum(el, nome){ const v = parseFloat(nfTxt(el, nome)); return isFinite(v) ? v : 0; }
+function nfSomaTag(el, nome){ if(!el) return 0; let s=0; const l = el.getElementsByTagNameNS('*', nome); for(const t of l){ const v=parseFloat(t.textContent); if(isFinite(v)) s+=v; } return s; }
+function nfParseXml(texto){
+  const doc = new DOMParser().parseFromString(texto, 'application/xml');
+  if(doc.getElementsByTagName('parsererror').length) throw new Error('Esse arquivo não é um XML válido.');
+  const inf = nfTag(doc, 'infNFe');
+  if(!inf) throw new Error('Esse XML não é de nota fiscal eletrônica (NF-e). Confira se escolheu o arquivo certo.');
+  const chave = (inf.getAttribute('Id')||'').replace(/\D/g,'') || nfTxt(doc,'chNFe');
+  const ide = nfTag(inf,'ide'), emit = nfTag(inf,'emit'), dest = nfTag(inf,'dest'), tot = nfTag(inf,'ICMSTot');
+  const ender = nfTag(emit,'enderEmit');
+  const dh = nfTxt(ide,'dhEmi') || nfTxt(ide,'dEmi');
+  const itens = [];
+  for(const det of inf.getElementsByTagNameNS('*','det')){
+    const prod = nfTag(det,'prod'), imp = nfTag(det,'imposto');
+    const ean = nfTxt(prod,'cEAN'), eanTrib = nfTxt(prod,'cEANTrib');
+    const okEan = v => v && /^\d{8,14}$/.test(v) ? v : '';
+    const icms = nfTag(imp,'ICMS'), ipi = nfTag(imp,'IPI'), pis = nfTag(imp,'PIS'), cofins = nfTag(imp,'COFINS');
+    const qCom = nfNum(prod,'qCom'), qTrib = nfNum(prod,'qTrib');
+    const uCom = nfTxt(prod,'uCom'), uTrib = nfTxt(prod,'uTrib');
+    itens.push({
+      nItem: det.getAttribute('nItem')||String(itens.length+1),
+      cProd: nfTxt(prod,'cProd'), ean: okEan(ean) || okEan(eanTrib), eanTrib: okEan(eanTrib),
+      xProd: nfTxt(prod,'xProd'), ncm: nfTxt(prod,'NCM'), cest: nfTxt(prod,'CEST'), cfop: nfTxt(prod,'CFOP'),
+      uCom, qCom, vUnCom: nfNum(prod,'vUnCom'), vProd: nfNum(prod,'vProd'), uTrib, qTrib,
+      vDesc: nfNum(prod,'vDesc'), vFrete: nfNum(prod,'vFrete'), vOutro: nfNum(prod,'vOutro'),
+      icms: { cst: nfTxt(icms,'CST')||nfTxt(icms,'CSOSN'), vBC: nfNum(icms,'vBC'), pICMS: nfNum(icms,'pICMS'), vICMS: nfNum(icms,'vICMS'), vICMSST: nfNum(icms,'vICMSST') },
+      vIPI: nfNum(ipi,'vIPI'), vPIS: nfNum(pis,'vPIS'), vCOFINS: nfNum(cofins,'vCOFINS'),
+      embalagem: (qTrib>qCom && qCom>0 && Number.isInteger(+(qTrib/qCom).toFixed(6)) && uTrib.toUpperCase()!==uCom.toUpperCase()) ? +(qTrib/qCom).toFixed(6) : 1
+    });
+  }
+  if(!itens.length) throw new Error('Essa nota não tem itens.');
+  return {
+    chave, numero: nfTxt(ide,'nNF'), serie: nfTxt(ide,'serie'), dataEmissao: dh ? dh.slice(0,10) : '', natOp: nfTxt(ide,'natOp'), tpNF: nfTxt(ide,'tpNF'),
+    fornecedor: { cnpj: nfTxt(emit,'CNPJ')||nfTxt(emit,'CPF'), nome: nfTxt(emit,'xNome'), fantasia: nfTxt(emit,'xFant'), ie: nfTxt(emit,'IE'),
+      endereco: [nfTxt(ender,'xLgr'), nfTxt(ender,'nro'), nfTxt(ender,'xBairro'), nfTxt(ender,'xMun'), nfTxt(ender,'UF')].filter(Boolean).join(', '), telefone: nfTxt(ender,'fone') },
+    destinatario: { cnpj: nfTxt(dest,'CNPJ')||nfTxt(dest,'CPF'), nome: nfTxt(dest,'xNome') },
+    totais: { vProd: nfNum(tot,'vProd'), vNF: nfNum(tot,'vNF'), vICMS: nfNum(tot,'vICMS'), vST: nfNum(tot,'vST'), vIPI: nfNum(tot,'vIPI'), vPIS: nfNum(tot,'vPIS'), vCOFINS: nfNum(tot,'vCOFINS'), vFrete: nfNum(tot,'vFrete'), vDesc: nfNum(tot,'vDesc') },
+    itens
+  };
+}
+function nfAcharProduto(nota, it){
+  const vinc = (DB.settings.vinculosNF||{})[nota.fornecedor.cnpj+'|'+it.cProd];
+  if(vinc && DB.products.find(p=>p.id===vinc.productId)) return {id:vinc.productId, como:'lembrado', embalagem:vinc.embalagem||null};
+  for(const cod of [it.ean, it.eanTrib]){
+    const k = chaveCodigo(cod); if(!k) continue;
+    const p = DB.products.find(x=>chaveCodigo(x.barcode)===k);
+    if(p) return {id:p.id, como:'código de barras'};
+  }
+  return null;
+}
+function nfCarregarXml(texto){
+  const nota = nfParseXml(texto);
+  if(nfChaveLida && nota.chave && nota.chave!==nfChaveLida.chave){
+    showToast('❌ Esse XML é de OUTRA nota (nº '+nota.numero+'). O código bipado é da nota nº '+nfChaveLida.numero+'. Escolha o XML certo.', 9000);
+    return;
+  }
+  if(nota.tpNF==='0') showToast('⚠️ Atenção: essa nota é de ENTRADA do emitente (não é uma venda para você). Confira com cuidado.', 8000);
+  nota.itens.forEach(it=>{
+    const achado = nfAcharProduto(nota, it);
+    it.productId = achado ? achado.id : '';
+    it.como = achado ? achado.como : '';
+    if(achado && achado.embalagem) it.embalagem = achado.embalagem;
+    it.qtdEntrada = +(it.qCom * it.embalagem).toFixed(3);
+  });
+  nota.atualizarCusto = false;
+  nfConferencia = nota;
+  if(!nfChaveLida && nota.chave){ const r = nfLerChave(nota.chave); if(!r.erro) nfChaveLida = r; }
+  renderContent();
+  const ja = nfJaImportada(nota.chave);
+  if(ja) showToast('⚠️ Esta nota JÁ foi lançada antes. Não confirme de novo.', 8000);
+  else showToast('✅ Nota carregada: '+nota.itens.length+' itens. Confira e confirme no final.', 5000);
+}
+function nfProdutoNome(id){ const p = DB.products.find(x=>x.id===id); return p ? p.name : ''; }
+function renderConferenciaNota(){
+  const n = nfConferencia;
+  const ja = nfJaImportada(n.chave);
+  const prods = [...DB.products].sort((a,b)=>a.name.localeCompare(b.name));
+  const ligados = n.itens.filter(i=>i.productId).length;
+  return `
+  <div class="card nf-card">
+    <div class="flexbet"><h2>📄 Conferir nota nº ${escapeHtml(n.numero)}</h2><button class="btn btn-outline btn-sm" onclick="nfCancelar()">✖ Cancelar</button></div>
+    <div class="nf-cab">
+      <div><span class="muted">Fornecedor</span><br><strong>${escapeHtml(n.fornecedor.fantasia||n.fornecedor.nome)}</strong><br><span class="muted">${escapeHtml(n.fornecedor.nome)} · CNPJ ${escapeHtml(nfFormatarCNPJ(n.fornecedor.cnpj))}${n.fornecedor.ie?' · IE '+escapeHtml(n.fornecedor.ie):''}</span></div>
+      <div><span class="muted">Nota</span><br><strong>nº ${escapeHtml(n.numero)} série ${escapeHtml(n.serie)}</strong><br><span class="muted">Emissão ${n.dataEmissao?n.dataEmissao.split('-').reverse().join('/'):'—'} · ${escapeHtml(n.natOp)}</span></div>
+      <div><span class="muted">Valor da nota</span><br><strong style="font-size:20px;">${brl(n.totais.vNF)}</strong><br><span class="muted">Produtos ${brl(n.totais.vProd)} · ICMS ${brl(n.totais.vICMS)} · ST ${brl(n.totais.vST)} · IPI ${brl(n.totais.vIPI)}</span></div>
+    </div>
+    ${ja?`<div class="nf-alerta">⚠️ Esta nota JÁ foi lançada em ${new Date(ja.importadaEm).toLocaleString('pt-BR')}. Se confirmar de novo, o estoque fica dobrado.</div>`:''}
+    <div class="small-note" style="margin-bottom:10px;">Confira cada linha. Em "Produto no seu estoque", bipe o código ou digite o nome. Itens sem produto ficam de fora. ${ligados} de ${n.itens.length} itens já foram reconhecidos.</div>
+    <datalist id="nfProdList">${prods.map(p=>`<option value="${escapeHtml(p.name)}">${escapeHtml(p.barcode||'')}</option>`).join('')}</datalist>
+    <div class="nf-tabela-wrap">
+    <table class="nf-tabela">
+      <thead><tr><th>#</th><th>Item da nota</th><th>NCM / CFOP</th><th class="right">Qtd nota</th><th class="right">Valor unit.</th><th class="right">Total</th><th class="right">Impostos</th><th>Produto no seu estoque</th><th class="right">Un. por emb.</th><th class="right">Entra no estoque</th></tr></thead>
+      <tbody>
+      ${n.itens.map((it,i)=>{
+        const p = DB.products.find(x=>x.id===it.productId);
+        const imp = it.icms.vICMS + it.icms.vICMSST + it.vIPI + it.vPIS + it.vCOFINS;
+        return `<tr class="${p?'':'nf-sem'}">
+          <td class="muted">${escapeHtml(it.nItem)}</td>
+          <td><strong>${escapeHtml(it.xProd)}</strong><br><span class="muted mono" style="font-size:11px;">cód ${escapeHtml(it.cProd)}${it.ean?' · EAN '+escapeHtml(it.ean):''}</span></td>
+          <td class="mono" style="font-size:12px;">${escapeHtml(it.ncm)}<br>${escapeHtml(it.cfop)}</td>
+          <td class="right">${it.qCom.toLocaleString('pt-BR')} ${escapeHtml(it.uCom)}</td>
+          <td class="right">${brl(it.vUnCom)}</td>
+          <td class="right">${brl(it.vProd)}</td>
+          <td class="right" title="ICMS ${brl(it.icms.vICMS)} (${it.icms.pICMS}%) · ST ${brl(it.icms.vICMSST)} · IPI ${brl(it.vIPI)} · PIS ${brl(it.vPIS)} · COFINS ${brl(it.vCOFINS)} · CST ${escapeHtml(it.icms.cst)}">${brl(imp)}</td>
+          <td style="min-width:210px;">
+            <input list="nfProdList" class="nf-prod-input" value="${p?escapeHtml(p.name):''}" placeholder="Bipe ou digite o produto..." onchange="nfEscolherProduto(${i}, this.value)">
+            ${p?`<div class="muted" style="font-size:11px;">✅ ${it.como?'achado pelo '+escapeHtml(it.como)+' · ':''}estoque agora: ${p.stock}</div>`
+               :`<button class="btn btn-outline btn-sm" style="margin-top:4px;" onclick="nfCadastrarNovo(${i})">➕ Cadastrar produto novo</button>`}
+          </td>
+          <td class="right"><input type="number" min="1" step="1" class="nf-num" value="${it.embalagem}" onchange="nfMudarEmbalagem(${i}, this.value)" title="Quantas unidades vêm em cada ${escapeHtml(it.uCom)}"></td>
+          <td class="right"><input type="number" min="0" step="0.001" class="nf-num" value="${it.qtdEntrada}" onchange="nfMudarQtd(${i}, this.value)"></td>
+        </tr>`;}).join('')}
+      </tbody>
+    </table>
+    </div>
+    <label class="nf-check"><input type="checkbox" ${n.atualizarCusto?'checked':''} onchange="nfConferencia.atualizarCusto=this.checked"> Atualizar o <strong>preço de custo</strong> dos produtos com o valor desta nota (o preço de venda nunca muda)</label>
+    <button class="btn btn-primary btn-block" style="margin-top:14px;" onclick="nfConfirmarEntrada()">✅ Confirmar entrada de ${ligados} ${ligados===1?'item':'itens'} no estoque</button>
+  </div>`;
+}
+function nfEscolherProduto(i, val){
+  const it = nfConferencia.itens[i]; val = String(val||'').trim();
+  if(!val){ it.productId=''; it.como=''; renderContent(); return; }
+  const k = chaveCodigo(val);
+  const p = DB.products.find(x=>x.name===val) || (k ? DB.products.find(x=>chaveCodigo(x.barcode)===k) : null) || DB.products.find(x=>chaveNome(x.name)===chaveNome(val));
+  if(!p){ showToast('Produto não encontrado: "'+val+'". Escolha da lista ou use "Cadastrar produto novo".', 6000); renderContent(); return; }
+  it.productId = p.id; it.como = 'você';
+  renderContent();
+}
+function nfMudarEmbalagem(i, v){
+  const it = nfConferencia.itens[i]; const e = parseFloat(v);
+  if(!(e>0)){ renderContent(); return; }
+  it.embalagem = e; it.qtdEntrada = +(it.qCom*e).toFixed(3); renderContent();
+}
+function nfMudarQtd(i, v){ const q = parseFloat(v); nfConferencia.itens[i].qtdEntrada = q>=0 ? q : 0; }
+function nfCadastrarNovo(i){
+  const it = nfConferencia.itens[i];
+  nfAguardandoCadastroIdx = i;
+  openProductModal(null, it.ean||'', it.ean ? '' : it.xProd);
+  setTimeout(()=>{
+    const custo = document.getElementById('mCusto');
+    if(custo && !custo.value){ const tot = it.vProd + it.icms.vICMSST + it.vIPI; custo.value = (it.qtdEntrada>0 ? tot/it.qtdEntrada : it.vUnCom).toFixed(2); }
+    const nome = document.getElementById('mNome');
+    if(nome && !nome.value) nome.value = it.xProd;
+  }, 400);
+}
+function nfProdutoCadastrado(prod){
+  if(nfConferencia && nfAguardandoCadastroIdx!==null && nfConferencia.itens[nfAguardandoCadastroIdx]){
+    const it = nfConferencia.itens[nfAguardandoCadastroIdx];
+    it.productId = prod.id; it.como = 'cadastro novo';
+  }
+  nfAguardandoCadastroIdx = null;
+}
+function nfCancelar(){
+  if(!confirm('Cancelar a conferência desta nota? Nada foi lançado no estoque.')) return;
+  nfConferencia = null; nfChaveLida = null; renderContent();
+}
+async function nfConfirmarEntrada(){
+  const n = nfConferencia; if(!n) return;
+  const itens = n.itens.filter(it=>it.productId && it.qtdEntrada>0);
+  if(!itens.length){ showToast('Nenhum item ligado a um produto do estoque. Escolha os produtos antes de confirmar.', 6000); return; }
+  const fora = n.itens.length - itens.length;
+  const ja = nfJaImportada(n.chave);
+  let msg = 'Confirmar a entrada da nota nº '+n.numero+'?\n\n'+itens.length+' itens vão somar no estoque.';
+  if(fora) msg += '\n'+fora+' item(ns) sem produto ficam de fora.';
+  if(n.atualizarCusto) msg += '\nO preço de custo será atualizado.';
+  if(ja) msg = '⚠️ ESTA NOTA JÁ FOI LANÇADA ANTES!\nConfirmar de novo vai DOBRAR o estoque.\n\n'+msg;
+  if(!confirm(msg)) return;
+  const cnpj = n.fornecedor.cnpj;
+  let forn = DB.suppliers.find(s=>s.cnpj && s.cnpj===cnpj) || DB.suppliers.find(s=>chaveNome(s.name)===chaveNome(n.fornecedor.fantasia||n.fornecedor.nome));
+  if(!forn){
+    forn = {id:uid(), name:n.fornecedor.fantasia||n.fornecedor.nome, cnpj, contato:'', telefone:n.fornecedor.telefone||'', email:'', endereco:n.fornecedor.endereco||'', obs:'Razão social: '+n.fornecedor.nome+' · CNPJ '+nfFormatarCNPJ(cnpj)+(n.fornecedor.ie?' · IE '+n.fornecedor.ie:'')+' (cadastrado pela nota fiscal)', createdAt:nowISO()};
+    DB.suppliers.push(forn);
+  }else if(!forn.cnpj){ forn.cnpj = cnpj; }
+  DB.settings.vinculosNF = DB.settings.vinculosNF || {};
+  const nfNumero = String(n.numero), nfData = n.dataEmissao || null;
+  let seq = DB.movements.filter(m=>m.type==='entrada' && m.nfNumero===nfNumero).length;
+  const agora = nowISO();
+  for(const it of itens){
+    const p = DB.products.find(x=>x.id===it.productId); if(!p) continue;
+    const qty = +it.qtdEntrada;
+    p.stock = +((Number(p.stock)||0) + qty).toFixed(3);
+    if(n.atualizarCusto && qty>0){
+      const custoUn = (it.vProd - it.vDesc + it.vFrete + it.vOutro + it.icms.vICMSST + it.vIPI) / qty;
+      if(custoUn>0) p.cost = +custoUn.toFixed(2);
+    }
+    seq++;
+    DB.movements.push({id:uid(), productId:p.id, productName:p.name, type:'entrada', qty,
+      reason:'Compra de fornecedor — NF-e '+nfNumero+' '+(n.fornecedor.fantasia||n.fornecedor.nome)+' (item '+it.nItem+': '+it.xProd+')',
+      operator:operatorName, date:agora, nfNumero, nfData, nfSeq:seq, nfChave:n.chave});
+    DB.settings.vinculosNF[cnpj+'|'+it.cProd] = {productId:p.id, embalagem:it.embalagem};
+  }
+  DB.settings.notasEntrada = DB.settings.notasEntrada || [];
+  DB.settings.notasEntrada.push({chave:n.chave, numero:nfNumero, serie:n.serie, dataEmissao:nfData, fornecedor:n.fornecedor.nome, cnpj, valor:n.totais.vNF, itens:itens.length, importadaEm:agora, operador:operatorName});
+  await Promise.all([saveKey(KEYS.products, DB.products), saveKey(KEYS.movements, DB.movements), saveKey(KEYS.suppliers, DB.suppliers), saveKey(KEYS.settings, DB.settings)]);
+  nfConferencia = null; nfChaveLida = null;
+  showToast('✅ Entrada da nota nº '+nfNumero+' feita: '+itens.length+' itens somados no estoque.', 6000);
   renderContent();
 }
 function renderHistorico(){
@@ -6211,7 +6518,10 @@ async function saveProduct(id){
     DB.products.push(novoProdutoCriado);
   }
   await saveKey(KEYS.products, DB.products);
-  if(novoProdutoCriado && aguardandoNovoProdutoEntrada){
+  if(novoProdutoCriado && nfAguardandoCadastroIdx!==null && nfConferencia){
+    nfProdutoCadastrado(novoProdutoCriado);
+    closeModal(); showToast('✅ Produto cadastrado e ligado ao item da nota.'); renderContent();
+  }else if(novoProdutoCriado && aguardandoNovoProdutoEntrada){
     aguardandoNovoProdutoEntrada = false;
     selecionarProdutoAoRenderizarMov = novoProdutoCriado.id;
     closeModal(); showToast('✅ Produto cadastrado! Agora é só informar a quantidade da entrada.'); renderContent();
@@ -7186,7 +7496,7 @@ async function iniciarBackupAutomatico(){
 /* ================================================================
    ATUALIZAÇÕES — verifica no GitHub se existe versão mais nova
    ================================================================ */
-const APP_VERSAO = '2.5.4';
+const APP_VERSAO = '2.6.0';
 const URL_VERSAO = 'https://raw.githubusercontent.com/serfico21-arch/pdv/main/versao.json';
 const URL_REPO_OK = 'https://github.com/serfico21-arch/pdv/';
 let _upd = { checando:false, ultima:null, info:null, erro:null, avisou:false };

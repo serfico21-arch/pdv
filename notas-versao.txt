@@ -1,3 +1,5 @@
+Entrada pela nota fiscal: bipe o código de barras do DANFE, escolha o XML e os itens da nota aparecem sozinhos para conferir e confirmar
+A nota já lançada é avisada para o estoque não ficar dobrado; o produto de cada fornecedor fica lembrado para a próxima nota
 Número da versão grande e amarelo no topo; janela "Gestor atualizado!" mostra a versão nova depois de atualizar
 Cadastro pelo código de barras: ao bipar, nome, marca, categoria e foto são preenchidos sozinhos (preço e estoque continuam com você)
 Aviso ao administrador explicando as novidades (fotos e produtos repetidos)
