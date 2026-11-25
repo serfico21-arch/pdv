@@ -1,10 +1,11 @@
 {
-  "versao": "2.6.0",
+  "versao": "2.6.1",
   "data": "2026-11-25",
   "instalador": "https://github.com/serfico21-arch/pdv/raw/main/FCostaGestor-Instalador.exe",
   "html": "https://github.com/serfico21-arch/pdv/raw/main/fcosta-gestor.html",
-  "sha256": "455e53625c1c154badbc280245a31b40bef0c08826d965b5061854fc048b07dc",
+  "sha256": "00f9f5f479cdd77a8a8de49f98156f4994dfa4eecae259ea32d3813ae212977a",
   "notas": [
+    "Celular mais fácil: aponte a câmera do celular para o quadrado do gestor uma vez e pronto, sem digitar código",
     "Entrada pela nota fiscal: bipe o código de barras do DANFE, escolha o XML e os itens da nota aparecem sozinhos para conferir e confirmar",
     "Leitor no celular: leia o QR do cupom ou o código do DANFE com o celular e o gestor abre sozinho a Entrada de Mercadoria com a nota",
     "Ler a nota ou o cupom direto do PDF do scanner ou de uma foto (acha o QR Code ou a chave sozinho)",
