@@ -4183,6 +4183,7 @@ async function estranhoEstaCerto(id){
   await Promise.all([saveKey(KEYS.settings, DB.settings), saveKey(KEYS.products, DB.products)]); renderContent();
 }
 function renderMovForm(type){
+  movUltimoProduto = null; setTimeout(movAtualizarUnidade, 0);
   const prods = [...DB.products].sort((a,b)=>a.name.localeCompare(b.name));
   const isEntrada = type==='entrada';
   const preSelecionar = isEntrada ? selecionarProdutoAoRenderizarMov : null;
@@ -4201,8 +4202,8 @@ function renderMovForm(type){
       </select>
     </div>
     <div class="grid2" style="gap:12px;">
-      <div class="field"><label id="movQtdLabel">Quantidade</label><input type="number" min="0.001" step="0.001" id="movQtd" placeholder="0" oninput="movAtualizarUnidade()">
-        <div id="movComo" style="margin-top:6px;"></div><div id="movTotal" class="small-note" style="margin-top:4px;font-weight:700;"></div></div>
+      <div class="field"><label id="movQtdLabel">Quantidade</label><input type="number" min="0.001" step="0.001" id="movQtd" placeholder="0" oninput="movAtualizarTotal()">
+        <div id="movComo" style="margin-top:6px;"></div><div id="movTotal" style="margin-top:6px;font-weight:800;font-size:17px;color:#1f7a44;"></div></div>
       <div class="field">
         <label>Motivo</label>
         <select id="movMotivo">
@@ -4240,28 +4241,58 @@ function onMovBuscaChange(){
     document.getElementById('movBusca').value='';
   }
 }
-let movEmEmbalagem = true;
+/* Entrada/Saída: escolha a unidade em que está contando (kg, gramas, unidade, caixa, bandeja, fardo...).
+   O gestor converte SEMPRE para a unidade do produto: kg (por peso) ou unidade. Nunca mistura. */
+let movUnidade = '', movEmbN = 0, movEmbNomeTmp = '';
+const MOV_EMBS = ['Caixa','Bandeja','Fardo','Pacote','Dúzia','Cartela','Display'];
 function movProdutoAtual(){ const el = document.getElementById('movProduto'); return el ? DB.products.find(x=>x.id===el.value) : null; }
 function fmtQtdEstoque(p, q){
   if(p && p.saleType==='peso'){ const g = Math.round(q*1000); return q.toLocaleString('pt-BR',{maximumFractionDigits:3})+' kg'+(q<1&&q>0?' ('+g+' g)':''); }
   return q.toLocaleString('pt-BR',{maximumFractionDigits:3})+(q===1?' unidade':' unidades');
 }
-// Quanto entra/sai no estoque (sempre na unidade de venda: unidade ou kg)
+function movUnidadesDe(p){
+  if(!p) return [];
+  if(p.saleType==='peso') return [{id:'kg', txt:'⚖️ Quilos (kg)'}, {id:'g', txt:'Gramas (g)'}];
+  return [{id:'un', txt:'1️⃣ Unidade'}, {id:'emb', txt:'📦 Caixa / Bandeja / Fardo'}];
+}
+let movUltimoProduto = null;
+function movPrepararProduto(p){
+  if(!p || movUltimoProduto===p.id) return;
+  movUltimoProduto = p.id;
+  if(p.saleType==='peso') movUnidade = 'kg';
+  else if(p.embQtd>1){ movUnidade = 'emb'; movEmbN = p.embQtd; movEmbNomeTmp = p.embNome||'Caixa'; }
+  else { movUnidade = 'un'; movEmbN = 0; movEmbNomeTmp = 'Caixa'; }
+}
+// Quanto entra/sai no estoque, já na unidade do produto
 function movQtdEstoque(){
   const p = movProdutoAtual(); const q = parseFloat((document.getElementById('movQtd')||{}).value)||0;
-  if(p && p.saleType!=='peso' && p.embQtd>1 && movEmEmbalagem) return q * p.embQtd;
+  if(!p) return q;
+  if(p.saleType==='peso') return movUnidade==='g' ? q/1000 : q;
+  if(movUnidade==='emb') return movEmbN>1 ? q*movEmbN : 0;
   return q;
 }
+function movEscolherUnidade(u){ movUnidade = u; movAtualizarUnidade(); }
 function movAtualizarUnidade(){
   const p = movProdutoAtual(); const como = document.getElementById('movComo'); const tot = document.getElementById('movTotal'); const lab = document.getElementById('movQtdLabel');
   if(!como || !tot || !lab) return;
-  const temEmb = p && p.saleType!=='peso' && p.embQtd>1;
-  lab.textContent = p && p.saleType==='peso' ? 'Peso (kg)' : (temEmb && movEmEmbalagem ? 'Quantas '+(p.embNome||'caixa').toLowerCase()+'s' : 'Quantidade (unidades)');
-  como.innerHTML = temEmb ? `<div class="mov-un">
-      <button type="button" class="${movEmEmbalagem?'on':''}" onclick="movEmEmbalagem=true;movAtualizarUnidade()">📦 ${escapeHtml(p.embNome||'Caixa')} com ${p.embQtd}</button>
-      <button type="button" class="${movEmEmbalagem?'':'on'}" onclick="movEmEmbalagem=false;movAtualizarUnidade()">1️⃣ Unidade</button></div>` : '';
+  movPrepararProduto(p);
+  if(!p){ como.innerHTML=''; tot.textContent=''; return; }
+  const ops = movUnidadesDe(p);
+  let extra = '';
+  if(p.saleType!=='peso' && movUnidade==='emb'){
+    extra = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">
+      <select style="width:auto;" onchange="movEmbNomeTmp=this.value;movAtualizarUnidade()">${MOV_EMBS.map(x=>`<option ${x===movEmbNomeTmp?'selected':''}>${x}</option>`).join('')}</select>
+      <span>com</span><input type="number" min="2" step="1" value="${movEmbN>1?movEmbN:''}" placeholder="30" style="width:90px;" oninput="movEmbN=Math.round(parseFloat(this.value)||0);movAtualizarTotal()"><span>unidades cada</span></div>`;
+  }
+  como.innerHTML = `<div class="small-note" style="margin:0 0 4px;">Estou contando em:</div><div class="mov-un">${ops.map(o=>`<button type="button" class="${movUnidade===o.id?'on':''}" onclick="movEscolherUnidade('${o.id}')">${o.txt}</button>`).join('')}</div>${extra}`;
+  lab.textContent = p.saleType==='peso' ? (movUnidade==='g' ? 'Quantos gramas' : 'Quantos kg') : (movUnidade==='emb' ? (['Fardo','Pacote','Display'].includes(movEmbNomeTmp)?'Quantos ':'Quantas ')+movEmbNomeTmp.toLowerCase()+'s' : 'Quantas unidades');
+  movAtualizarTotal();
+}
+function movAtualizarTotal(){
+  const p = movProdutoAtual(); const tot = document.getElementById('movTotal'); if(!tot || !p) return;
   const q = parseFloat((document.getElementById('movQtd')||{}).value)||0;
-  tot.textContent = p && q>0 ? '= '+fmtQtdEstoque(p, movQtdEstoque())+' no estoque' : (p && p.saleType==='peso' ? 'Ex.: peça de 3,5 kg → digite 3,5' : '');
+  if(p.saleType!=='peso' && movUnidade==='emb' && !(movEmbN>1)){ tot.textContent = 'Diga quantas unidades vêm em cada '+movEmbNomeTmp.toLowerCase()+'.'; return; }
+  tot.textContent = q>0 ? '= '+fmtQtdEstoque(p, movQtdEstoque())+' no estoque' : (p.saleType==='peso' ? 'O estoque deste produto é em kg.' : 'O estoque deste produto é em unidades.');
 }
 async function registrarMovimento(type){
   const productId = document.getElementById('movProduto').value;
@@ -4270,8 +4301,12 @@ async function registrarMovimento(type){
   const obs = document.getElementById('movObs').value.trim();
   const p = DB.products.find(x=>x.id===productId);
   if(!p){ showToast('Produto não encontrado. Atualize a página e tente novamente.'); return; }
+  if(p.saleType!=='peso' && movUnidade==='emb' && !(movEmbN>1)){ showToast('Diga quantas unidades vêm em cada '+movEmbNomeTmp.toLowerCase()+'.'); return; }
   if(!qty || qty<=0){ showToast('Informe uma quantidade válida.'); return; }
-  if(type==='saida' && p.stock < qty){ showToast('Estoque insuficiente para essa saída.'); return; }
+  if(p.saleType!=='peso' && !Number.isInteger(qty)){ showToast('"'+p.name+'" é contado em unidades: a conta deu '+qty+'. Confira a quantidade.', 6000); return; }
+  // lembra a embalagem no cadastro (ex.: Bandeja com 30) para a próxima vez
+  if(p.saleType!=='peso' && movUnidade==='emb' && movEmbN>1 && (p.embQtd!==movEmbN || p.embNome!==movEmbNomeTmp)){ p.embQtd = movEmbN; p.embNome = movEmbNomeTmp; }
+  if(type==='saida' && !p.semEstoque && p.stock < qty){ showToast('Estoque insuficiente para essa saída.'); return; }
   p.stock = +((Number(p.stock)||0) + (type==='entrada'? qty : -qty)).toFixed(3);
   let nfNumero = null, nfData = null, nfSeq = null;
   if(type==='entrada'){
@@ -4286,6 +4321,7 @@ async function registrarMovimento(type){
   DB.movements.push({id:uid(), productId:p.id, productName:p.name, type, qty, reason:obs?reason+' — '+obs:reason, operator:operatorName, date:nowISO(), nfNumero, nfData, nfSeq});
   await Promise.all([saveKey(KEYS.products, DB.products), saveKey(KEYS.movements, DB.movements)]);
   showToast((type==='entrada'?'Entrada registrada: +':'Saída registrada: -')+fmtQtdEstoque(p, qty)+' de '+p.name+'.', 5000);
+  movUltimoProduto = null;
   renderContent();
 }
 /* ================================================================
@@ -7965,7 +8001,7 @@ async function iniciarBackupAutomatico(){
 /* ================================================================
    ATUALIZAÇÕES — verifica no GitHub se existe versão mais nova
    ================================================================ */
-const APP_VERSAO = '2.6.2';
+const APP_VERSAO = '2.6.3';
 const URL_VERSAO = 'https://raw.githubusercontent.com/serfico21-arch/pdv/main/versao.json';
 const URL_REPO_OK = 'https://github.com/serfico21-arch/pdv/';
 let _upd = { checando:false, ultima:null, info:null, erro:null, avisou:false };

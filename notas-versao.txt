@@ -1,3 +1,4 @@
+Entrada e saída: escolha em que está contando (kg, gramas, unidade, caixa, bandeja, fardo...). O gestor converte sozinho para a unidade do produto e mostra quanto vai para o estoque
 Frios com preço por 100 g: no cadastro escolha "O preço é por 100 gramas"; na venda digite o peso da balança (0,250 ou 250 gramas) e o valor sai certo
 Ovos e caixas: no cadastro diga "vem em Bandeja com 30"; na entrada digite 2 bandejas e entram 60 unidades
 Nova opção "Não controlar estoque" para pão, diversos e o que é feito na loja (sem número gigante)
