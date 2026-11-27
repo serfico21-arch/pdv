@@ -5,7 +5,7 @@ Gestor de frente de caixa, estoque e financeiro. Funciona offline, no navegador 
 - **Instalador (Windows):** `FCostaGestor-Instalador.exe`
 - **Sistema sem instalar:** `fcosta-gestor.html`
 - **Página de download e instruções:** `index.html`
-- **Versão atual:** <!--VER-->2.6.3<!--/VER-->
+- **Versão atual:** <!--VER-->2.6.4<!--/VER-->
 
 ## Conferir o instalador
 
@@ -13,7 +13,7 @@ Gestor de frente de caixa, estoque e financeiro. Funciona offline, no navegador 
 certutil -hashfile FCostaGestor-Instalador.exe SHA256
 ```
 
-Deve resultar em: `<!--SHA-->370ddc63a9642a378de196df3bd728fdec79dd1cc6281d682b1b02b9ccfefef1<!--/SHA-->`
+Deve resultar em: `<!--SHA-->8e96f3b64a14a9c327606a006ac9824955a90d062cbc85e63fcba01b3d5e8b89<!--/SHA-->`
 
 ## Atenção com os dados
 
