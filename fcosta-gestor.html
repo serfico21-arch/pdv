@@ -8001,7 +8001,7 @@ async function iniciarBackupAutomatico(){
 /* ================================================================
    ATUALIZAÇÕES — verifica no GitHub se existe versão mais nova
    ================================================================ */
-const APP_VERSAO = '2.6.3';
+const APP_VERSAO = '2.6.4';
 const URL_VERSAO = 'https://raw.githubusercontent.com/serfico21-arch/pdv/main/versao.json';
 const URL_REPO_OK = 'https://github.com/serfico21-arch/pdv/';
 let _upd = { checando:false, ultima:null, info:null, erro:null, avisou:false };
@@ -8628,6 +8628,7 @@ function licAtualizarBadge(){
   const e = _lic.est; let txt = '';
   if(e && e.tipo==='teste') txt = '⏳ Teste: '+e.restam+(e.restam===1?' dia':' dias');
   else if(e && e.tipo==='ativa' && e.restam!==undefined && e.restam<=30) txt = '🔑 Licença vence em '+e.restam+(e.restam===1?' dia':' dias');
+  else if(e && e.tipo==='ativa') txt = '🔑 Licença';
   b.textContent = txt; b.style.display = txt ? '' : 'none';
 }
 function licFechar(){
